@@ -1,108 +1,220 @@
-# Happy Birthday —— 3D 粒子生日蛋糕
+# 🎂 3D Birthday Cake
+[Tiếng Việt](#VIE) | [English](#ENG)
+## VIE
+# Happy Birthday —— Bánh Sinh Nhật 3D
 
-一个用纯粒子堆出来的 3D 生日蛋糕。整个画面（蛋糕、盘子、飘带、火焰、蜡烛、纸屑、星云）都是点，没有任何一个三角形、没有一张模型贴图，也**没有一行 GLSL 着色器** —— 全程走 OpenGL 固定管线。
+Một chiếc bánh sinh nhật 3D được dựng hoàn toàn từ các hạt (particles). Toàn bộ khung cảnh (bánh kem, dĩa, dải ruy-băng, ngọn lửa, nến, giấy vụn confetti, tinh vân) đều là các điểm hạt (points), không hề có bất kỳ hình tam giác (triangle) hay hình dán mô hình (model texture) nào, và cũng **không dùng dù chỉ một dòng mã lệnh GLSL** —— toàn bộ quy trình chạy trên đường ống cố định (Fixed Function Pipeline) của OpenGL.
 
-![效果图](preview.png)
+![Ảnh xem trước](preview.png)
 
-参考图是 `1.png`，下面很多参数都是对着它一点点量的。
+Hình ảnh tham khảo là `preview.png`, rất nhiều thông số bên dưới được đo đạc tỉ mỉ dựa trên hình này.
 
 ---
 
-## 运行
+## Cài đặt & Chạy chương trình
 
-```
+```bash
 pip install pygame PyOpenGL numpy
 python birthday_cake.py
 ```
 
-> **Python 3.13 及以上**：官方 `pygame` 还没有对应的 wheel，装 `pygame-ce`（`pip install pygame-ce`）即可，它提供的模块名同样是 `pygame`，代码不用改。
+> **Dành cho Python 3.13 trở lên**: Thư viện chính thức `pygame` chưa có bản wheel tương thích, bạn chỉ cần cài `pygame-ce` (`pip install pygame-ce`). Thư viện này cung cấp tên module tương tự là `pygame`, vì vậy không cần sửa đổi mã nguồn.
 
-调试用的截图模式 —— 渲染 90 帧后存 `preview.png` 并退出，不用开着窗口：
+Chế độ chụp ảnh màn hình để kiểm thử —— lưu thành file `preview.png` sau khi render 90 khung hình rồi tự động thoát, không cần giữ cửa sổ mở:
 
-```
+```bash
 python birthday_cake.py --shot
 ```
 
-## 操作
+## Thao tác điều khiển
 
-| 操作 | 效果 |
+| Thao tác | Hiệu ứng |
 |---|---|
-| 鼠标左键拖动 | 旋转视角 |
-| 鼠标滚轮 | 缩放视角 |
-| `ESC` / 关闭窗口 | 退出 |
+| Nhấp giữ chuột trái và kéo | Xoay góc nhìn |
+| Cuộn chuột | Phóng to / Thu nhỏ góc nhìn |
+| Phím `ESC` / Đóng cửa sổ | Thoát chương trình |
 
 ---
 
-## 实现要点
+## Chi tiết kỹ thuật
 
-### 全部是点
+### Tất cả đều là điểm hạt (Points)
 
-每个系统是一组粒子，位置和颜色各一个 VBO，用 `glVertexPointer` / `glColorPointer` / `glDrawArrays(GL_POINTS)` 画出来。粒子大小不同时按大小分档，每档一次 `glPointSize` + `glDrawArrays`。每帧要动的系统用 `glBufferSubData` 更新。
+Mỗi hệ thống là một tập hợp hạt, tọa độ vị trí và màu sắc được lưu trong từng VBO riêng biệt, sử dụng `glVertexPointer` / `glColorPointer` / `glDrawArrays(GL_POINTS)` để vẽ. Khi kích thước hạt khác nhau, chúng được phân chia thành từng nhóm cỡ hạt, mỗi nhóm thực hiện một lần gọi `glPointSize` + `glDrawArrays`. Các hệ thống có chuyển động theo thời gian sẽ cập nhật dữ liệu bằng `glBufferSubData` ở mỗi khung hình.
 
-当前粒子总数 **216760**：
+Tổng số hạt hiện tại là **216,760**:
 
-| 部分 | 数量 | 部分 | 数量 |
+| Thành phần | Số lượng | Thành phần | Số lượng |
 |---|---:|---|---:|
-| 蛋糕 | 82000 | 纸屑 | 3000 |
-| 光环 | 95000 | 星星 | 1500 |
-| 底盘 | 28000 | 星云 | 900 |
-| 火焰 | 5200 | 蜡烛 | 700 |
+| Bánh kem | 82,000 | Giấy vụn Confetti | 3,000 |
+| Vòng hào quang | 95,000 | Ngôi sao | 1,500 |
+| Dĩa đựng | 28,000 | Tinh vân | 900 |
+| Ngọn lửa | 5,200 | Nến | 700 |
 
-### 两种完全不同的画法
+### Hai phương pháp vẽ hoàn toàn khác nhau
 
-- **实体面**（蛋糕、盘子、蜡烛）：不贴图的方点，关掉 `GL_POINT_SMOOTH`，用 `GL_LESS` + 写深度 + 覆盖式混合，alpha 预先乘进 RGB。一个像素基本只有一颗粒子说话，亮度纯粹来自粒子自己的颜色。`GL_LESS` 不能改成 `GL_LEQUAL`，否则最外面那层薄壳会过曝。
-- **发光物**（光环、火焰、纸屑、星云）：柔光球贴图 + 加法混合（`GL_SRC_ALPHA, GL_ONE`），不写深度但**照常接受深度测试**，所以蛋糕后面那半圈还是会被正确遮掉。
+- **Bề mặt thể rắn** (Bánh kem, dĩa, nến): Các điểm hạt hình vuông không dán texture, tắt chế độ làm mịn điểm `GL_POINT_SMOOTH`, kết hợp `GL_LESS` + ghi độ sâu (depth writing) + hòa trộn đè (overlapping blend), độ trong suốt alpha được nhân trước vào RGB. Mỗi điểm ảnh cơ bản chỉ do một hạt quyết định, độ sáng hoàn toàn đến từ màu sắc tự thân của hạt. Không được đổi `GL_LESS` thành `GL_LEQUAL`, nếu không lớp vỏ mỏng ngoài cùng sẽ bị cháy sáng (overexposed).
+- **Vật thể phát sáng** (Vòng hào quang, ngọn lửa, confetti, tinh vân): Sử dụng dán hình quả cầu ánh sáng mềm (soft light sphere texture) + hòa trộn cộng dồn (Additive Blending: `GL_SRC_ALPHA, GL_ONE`), không ghi độ sâu nhưng **vẫn chấp nhận kiểm tra độ sâu (Depth Test)** như bình thường, nhờ đó nửa vòng phía sau bánh kem vẫn được che khuất chính xác.
 
-### 不用着色器做辉光
+### Tạo hiệu ứng phát sáng (Glow/Bloom) không dùng Shader
 
-离屏 FBO 渲染 → 亮度阈值提取 → 小半径可分离高斯模糊（同一张图按纹理矩阵偏移画很多遍累加，近层半分辨率）→ 叠加回屏幕。
+Sử dụng Off-screen FBO Rendering → Trích xuất ngưỡng độ sáng (Brightness threshold extraction) → Làm mờ Gaussian phân tách bán kính nhỏ (Separable Gaussian Blur - vẽ lặp lại nhiều lần theo ma trận texture để tích lũy, tầng gần dùng bán phân giải) → Hòa trộn cộng dồn trở lại màn hình.
 
-亮度提取那一步是两个混合方程凑出来的：
+Bước trích xuất độ sáng được tạo ra từ việc kết hợp hai phương hình hòa trộn:
 
 ```
 bright = clamp(scene * GAIN - THRESHOLD, 0, 1)
 ```
 
-用 `glBlendFunc(GL_ONE, GL_ONE)` 配 `glBlendEquation(GL_FUNC_REVERSE_SUBTRACT)`。
+Sử dụng `glBlendFunc(GL_ONE, GL_ONE)` đi kèm với `glBlendEquation(GL_FUNC_REVERSE_SUBTRACT)`.
 
-有一点容易踩：**合成是加法不是插值**（`a0*原图 + a1*近层 + a2*远层`），所以任何亮过阈值的像素都会**变亮**，不只是"多一圈光晕"。阈值给低了整张图会糊掉。
+Một lưu ý quan trọng: **Quá trình tổng hợp là phép cộng chứ không phải phép nội suy** (`a0*Ảnh gốc + a1*Tầng gần + a2*Tầng xa`), do đó bất kỳ điểm ảnh nào vượt qua ngưỡng độ sáng đều sẽ **sáng lên**, chứ không chỉ đơn thuần là "có thêm một vòng hào quang". Nếu đặt ngưỡng quá thấp, toàn bộ bức ảnh sẽ bị nhòe.
 
-### 飘带是行波，不是随机抖
+### Ruy-băng là sóng lan truyền, không phải rung lắc ngẫu nhiên
 
-光环一开始是用 `ParticleSystem` 那套"每颗粒子随机频率上下抖"来做浮动的，结果 95000 颗粒子各抖各的，屏幕上只是一层毛边，动起来像在嗡嗡震。
+Vòng hào quang ban đầu dùng cơ chế `ParticleSystem` (mỗi hạt tự rung lắc lên xuống theo tần số ngẫu nhiên), dẫn đến 95,000 hạt rung lắc hỗn loạn, trên màn hình chỉ thấy một lớp rìa xù xì và chuyển động trông như bị rung giật.
 
-现在改成：每颗粒子的 `θ`、所在轨道面的倾角、基准半径/高度都存进 `anim`，每帧由 `ring_animate()` 重算 —— 同一条环在同一时刻只有一个相位，波峰沿着弧长以固定速度往前跑。这才是"带子在飘"。
+Hiện tại đã đổi thành: Tọa độ `θ` của từng hạt, góc nghiêng mặt phẳng quỹ đạo, bán kính/chiều cao cơ sở đều được lưu vào `anim` và tính toán lại ở mỗi khung hình qua `ring_animate()`. Nhờ đó, cùng một vòng ruy-băng tại một thời điểm chỉ có một pha duy nhất, đỉnh sóng di chuyển dọc theo chiều dài cung với tốc độ cố định. Đây mới chính là hiệu ứng "dải ruy-băng đang bay lượn".
 
-另外，环的粗细**必须让几何厚度超过粒子贴图**（贴图 2~4 像素）。原先 `RING_WIDTH = 0.0045` 折算到屏幕上不到 1 像素，比贴图还窄，于是环的厚度完全由贴图决定 —— 几何上再怎么提按，屏幕上都看不出粗细变化，只剩亮度在变。
+Ngoài ra, độ dày của vòng **bắt buộc phải để bề dày hình học lớn hơn kích thước texture hạt** (texture hạt từ 2~4 pixel). Ban đầu `RING_WIDTH = 0.0045` quy đổi ra màn hình chưa tới 1 pixel, hẹp hơn cả texture, khiến bề dày của vòng bị phụ thuộc hoàn toàn vào texture —— dẫn đến dù có điều chỉnh độ nét hình học thế nào thì trên màn hình cũng không thấy thay đổi về độ dày, mà chỉ thấy độ sáng thay đổi.
 
 ---
 
-## 调参
+## Điều chỉnh thông số
 
-配置区集中在文件开头的 `① 配置区`，注释里写了每个值为什么取这个数、上下限在哪里。几个最常动的：
+Các cấu hình được tập trung tại phần `① Phần Cấu hình` ở đầu file. Trong comment đã ghi rõ lý do chọn từng số liệu cũng như giới hạn trên/dưới. Một số thông số thường được chỉnh sửa nhất:
 
-| 常量 | 作用 |
+| Hằng số | Tác dụng |
 |---|---|
-| `ROT_SPEED` / `RING_SPIN` | 蛋糕和光环的自转速度（后者为负 = 反向转） |
-| `RING_WAVE_AMP` / `RING_WAVE_SPEED` | 飘带起伏的幅度和跑的速度 |
-| `RING_WIDTH` / `RING_COUNT` | 飘带基准粗细和点数（**这两个是一对**，调粗了点数要跟着加，否则会断成珠子） |
-| `BLOOM_THRESHOLD` / `BLOOM_GAIN` | 辉光阈值和增益 |
-| `BLOOM_W_ORIGINAL` / `_NEAR` / `_FAR` | 原图 / 近层 / 远层的合成权重 |
-| `BG_COLOR` | 背景底色（对照 `1.png` 量的，约 0.11 的蓝灰，不是纯黑） |
+| `ROT_SPEED` / `RING_SPIN` | Tốc độ tự xoay của bánh và vòng hào quang (giá trị âm = xoay ngược chiều) |
+| `RING_WAVE_AMP` / `RING_WAVE_SPEED` | Biên độ và tốc độ lượn sóng của dải ruy-băng |
+| `RING_WIDTH` / `RING_COUNT` | Độ dày cơ sở và số lượng hạt của ruy-băng (**Hai thông số này đi theo cặp**, khi tăng độ dày phải tăng số hạt tương ứng, nếu không sẽ bị đứt đoạn thành từng hạt chuỗi) |
+| `BLOOM_THRESHOLD` / `BLOOM_GAIN` | Ngưỡng và độ tăng cường hiệu ứng phát sáng (Bloom) |
+| `BLOOM_W_ORIGINAL` / `_NEAR` / `_FAR` | Trọng số tổng hợp của Ảnh gốc / Tầng gần / Tầng xa |
+| `BG_COLOR` | Màu nền (Được đo theo file `1.png`, khoảng màu xám xanh 0.11, không phải màu đen thuần) |
 
-## 已知限制
+## Giới hạn đã biết
 
-- 画面本质是一团点，**凑近看是颗粒**。参考图是手绘插画，笔触那种平滑感在粒子方案里做不出来，只能靠加密度逼近。
-- 飘带的几何是静态烘好的起伏 + 每帧位置重算，没有做形变。
-- 全屏 216760 个点的实测开销：`ring_animate` 中位 0.93 ms / p95 1.10 ms（60 fps 的预算是 16.67 ms）。粒子数再往上加，第一个顶不住的是加法混合的填充率，不是顶点。
+- Bản chất hình ảnh là một tập hợp các điểm hạt, **nhìn gần sẽ thấy rõ các hạt nhiễu**. Hình ảnh tham khảo là tranh minh họa vẽ tay, độ mượt của nét vẽ không thể tái tạo hoàn toàn bằng giải pháp hạt, chỉ có thể tăng mật độ hạt để tiến gần nhất có thể.
+- Hình học của dải ruy-băng là các gợn sóng nướng sẵn (static baked) + tính toán lại vị trí mỗi khung hình, không có biến dạng động (dynamic deformation).
+- Chi phí hiệu năng thực tế cho 216,760 hạt toàn màn hình: `ring_animate` mất trung bình 0.93 ms / p95 1.10 ms (ngân sách cho 60 fps là 16.67 ms). Nếu tăng thêm số lượng hạt, giới hạn đầu tiên gặp phải sẽ là tốc độ lấp đầy (fill rate) của phép hòa trộn cộng dồn, chứ không phải ở đỉnh (vertex).
 
 ---
 
-## 文件
+## Cấu trúc Tệp tin
+
+```text
+birthday_cake.py   Chương trình chính (Đơn tệp: Cấu hình + Tạo hạt + Render đều nằm ở đây)
+preview.png        Ảnh mẫu tham khảo
+```
+
+
+## ENG
+# Happy Birthday —— 3D Particle Birthday Cake
+
+A 3D birthday cake built entirely out of particles. The entire scene (cake, plate, ribbons, flame, candle, confetti, nebula) consists purely of points—there is not a single triangle, no model textures, and **not a single line of GLSL shader code**. Everything runs through the legacy OpenGL Fixed-Function Pipeline.
+
+![Preview](preview.png)
+
+The reference image is `preview.png`, from which many parameters were carefully measured and calibrated.
+
+---
+
+## Running the Application
+
+```bash
+pip install pygame PyOpenGL numpy
+python birthday_cake.py
+```
+
+> **Python 3.13 and above**: Since the official `pygame` does not yet have a compatible wheel, install `pygame-ce` (`pip install pygame-ce`). It provides the same module name `pygame`, so no code modifications are required.
+
+Screenshot mode for debugging —— renders 90 frames, saves to `preview.png`, and exits without needing to keep the window open:
+
+```bash
+python birthday_cake.py --shot
+```
+
+## Controls
+
+| Control | Effect |
+|---|---|
+| Left Mouse Drag | Rotate camera view |
+| Mouse Scroll | Zoom camera in / out |
+| `ESC` / Close Window | Exit application |
+
+---
+
+## Implementation Details
+
+### Pure Particle System
+
+Each sub-system is a group of particles with separate VBOs for positions and colors, rendered via `glVertexPointer` / `glColorPointer` / `glDrawArrays(GL_POINTS)`. When particles differ in size, they are grouped into size tiers, executing `glPointSize` + `glDrawArrays` once per tier. Systems that animate each frame are updated using `glBufferSubData`.
+
+Current total particle count is **216,760**:
+
+| Component | Count | Component | Count |
+|---|---:|---|---:|
+| Cake | 82,000 | Confetti | 3,000 |
+| Rings / Ribbons | 95,000 | Stars | 1,500 |
+| Plate | 28,000 | Nebula | 900 |
+| Flame | 5,200 | Candle | 700 |
+
+### Two Distinct Rendering Pass Approaches
+
+- **Solid Surfaces** (Cake, Plate, Candle): Untextured square points with `GL_POINT_SMOOTH` disabled, using `GL_LESS` + depth writing + opaque blending, with alpha pre-multiplied into RGB. Each pixel is predominantly controlled by a single particle, with brightness originating purely from the particle's own color. `GL_LESS` must not be changed to `GL_LEQUAL`; otherwise, the outermost thin shell will overexpose.
+- **Emissive / Glowing Objects** (Rings, Flame, Confetti, Nebula): Soft-light sphere texture + additive blending (`GL_SRC_ALPHA, GL_ONE`). Depth writing is disabled, but **depth testing remains enabled**, ensuring that the back half of the rings behind the cake is correctly occluded.
+
+### Shaderless Bloom Effect
+
+Off-screen FBO rendering → Brightness threshold extraction → Small-radius separable Gaussian blur (accumulated by drawing multiple passes offset by texture matrix, near layer at half-resolution) → Additive composite back to the screen.
+
+The brightness extraction step is achieved by combining two blend equations:
 
 ```
-birthday_cake.py   主程序（单文件，配置 + 粒子生成 + 渲染全在里面）
-1.png              参考图
-preview.png        --shot 渲染出来的效果图
+bright = clamp(scene * GAIN - THRESHOLD, 0, 1)
 ```
-# 3D-Birthday-Cake-VN-
+
+Using `glBlendFunc(GL_ONE, GL_ONE)` alongside `glBlendEquation(GL_FUNC_REVERSE_SUBTRACT)`.
+
+An important note: **Compositing is additive, not interpolative** (`a0*Original + a1*Near + a2*Far`). Thus, any pixel brighter than the threshold becomes **brighter overall**, rather than just acquiring an outer glow halo. Setting the threshold too low will blur the entire image.
+
+### Traveling Waves for Ribbons
+
+Initially, the ring float animation used a `ParticleSystem` approach where every particle bobbed up and down at random frequencies. As a result, 95,000 particles jittered independently, creating an ugly fuzzed edge that vibrated erratically on screen.
+
+It has been refactored so that each particle's `θ`, orbital plane tilt, and base radius/height are stored in `anim` and recomputed each frame via `ring_animate()`. Consequently, a single ring shares a unified phase at any given moment, with wave peaks traveling along the arc length at a constant speed—creating a true "drifting ribbon" motion.
+
+Additionally, the ribbon's geometric thickness **must exceed the particle texture size** (texture size 2–4 pixels). Previously, `RING_WIDTH = 0.0045` translated to less than 1 pixel on screen, which was narrower than the texture itself. As a result, the ribbon's visual thickness was governed entirely by the texture size—no matter how much geometric modulation was applied, only brightness changes were visible on screen instead of thickness variations.
+
+---
+
+## Parameter Tuning
+
+Configuration constants are centralized in section `① Phần Cấu hình (line 137)` at the top of the file. Comments explain the rationale and bounds for each value. Key constants to adjust:
+
+| Constant | Description |
+|---|---|
+| `ROT_SPEED` / `RING_SPIN` | Rotation speed for cake and rings (negative value = counter-clockwise) |
+| `RING_WAVE_AMP` / `RING_WAVE_SPEED` | Amplitude and speed of ribbon wave motion |
+| `RING_WIDTH` / `RING_COUNT` | Base thickness and particle count for ribbons (**Tuned as a pair**; increasing thickness requires increasing particle count to avoid breaking into discrete beads) |
+| `BLOOM_THRESHOLD` / `BLOOM_GAIN` | Threshold and gain for the bloom effect |
+| `BLOOM_W_ORIGINAL` / `_NEAR` / `_FAR` | Composite weights for Original / Near layer / Far layer |
+| `BG_COLOR` | Background color (sampled from `1.png`, approximately 0.11 blue-gray, not pure black) |
+
+## Known Limitations
+
+- The rendering consists of a particle cloud, meaning **individual grains are visible up close**. The reference image is a hand-drawn illustration whose smooth brushstrokes cannot be perfectly replicated via particles; it can only be approximated by increasing density.
+- Ribbon geometry relies on pre-baked static undulations + per-frame position recomputation rather than dynamic mesh deformation.
+- Measured performance cost for 216,760 full-screen points: `ring_animate` median 0.93 ms / p95 1.10 ms (budget for 60 fps is 16.67 ms). If particle counts are increased further, the primary bottleneck will be additive blending fill-rate rather than vertex processing.
+
+---
+
+## File Structure
+
+```text
+birthday_cake.py   Main script (Single-file: Config + Particle generation + Rendering)
+1.png              Reference image
+preview.png        Output screenshot generated via --shot
+```
+# 3D-Birthday-Cake
