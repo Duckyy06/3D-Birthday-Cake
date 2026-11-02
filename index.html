@@ -1,0 +1,1636 @@
+<title>3D Birthday Cake</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Roboto+Condensed:wght@700&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+Bảng màu: Một tông màu tối đồng nhất. Màu nền không phải là đen thuần túy—dựa trên việc lấy mẫu tại bốn góc của hình ảnh tham chiếu,
+màu sắc thu được là (0.098, 0.104, 0.125), một sắc xám hơi sáng với tông xanh lam nhẹ. Nền trang cũng sử dụng chính giá trị màu này,
+tạo nên sự chuyển tiếp liền mạch giữa vùng hiển thị (canvas) và trang web (các khoảng trống nằm trong "vùng an toàn" trên thiết bị di động cũng sử dụng cùng tông màu này). 
+Bố cục: Vùng hiển thị chiếm trọn toàn bộ màn hình; lời chào được đặt ở vị trí trung tâm phía dưới, trong khi các chỉ dẫn thao tác—mang phong cách của các thiết bị kỹ thuật—xuất hiện ở góc trên bên trái.
+───────────────────────────────────────────────────────────── */
+:root{
+  --bg:        #191b20;   /* Màu nền canvas; căn chỉnh chuẩn từng điểm ảnh; không có đường nối lộ rõ ​​*/
+  --bg-deep:   #0d0f13;   /* Áp dụng một lớp phủ, có tông màu tối hơn màu nền một bậc */
+  --fg:        #eef2ff;
+  --muted:     rgba(190,203,232,.55);
+  --muted-dim: rgba(190,203,232,.30);
+  --accent:    #5a82dc;   /* Hiệu ứng phát sáng màu xanh lam cho lời chào, được lấy từ TEXT_GLOW_RGB của chương trình gốc */
+  --rule:      rgba(140,163,214,.16);
+
+  --font-mono: "IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+
+  color-scheme: dark;
+}
+
+html,body{height:100%;}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--fg);
+  font-family:var(--font-mono);
+  overflow:hidden;
+  overscroll-behavior:none;
+}
+
+#stage{position:fixed;inset:0;overflow:hidden;}
+#gl{display:block;width:100%;height:100%;touch-action:none;cursor:grab;}
+#gl.dragging{cursor:grabbing;}
+
+/* ── Lời chào ─────────────────────────────────────────────────────
+Đây là một canvas, không phải văn bản dựa trên DOM — văn bản cùng với hiệu ứng phát sáng xung quanh được kết hợp thành một kết cấu (texture) duy nhất.
+Kết cấu này sau đó được hiển thị lên màn hình thông qua một lớp phủ tiêu chuẩn; do đó, chỉ cần một canvas là đủ (xem hàm buildGreet() để biết lý do chi tiết).
+Kích thước (bao gồm cả khoảng đệm xung quanh) được JavaScript tính toán dựa trên tỷ lệ khung hình của màn hình; tại đây, chúng ta chỉ xử lý việc định vị:
+căn giữa theo chiều ngang, với cạnh dưới cách mép dưới màn hình một khoảng bằng GREET_MARGIN pixel. */
+#greet{
+  position:absolute;
+  left:50%;
+  bottom:calc(var(--greet-bottom,42px) + env(safe-area-inset-bottom, 0px));
+  transform:translateX(-50%);
+  display:block;
+  pointer-events:none;
+  user-select:none;
+}
+
+/* ── Gợi ý sử dụng ───────────────────────────────────────────────────
+Một dòng hiển thị thông số theo phong cách bảng điều khiển thiết bị: các con số biểu thị số lượng hạt (particle) – dữ liệu thực tế cho tác phẩm này (Cake 82.000 / Halo 95.000 / …).
+Bất kỳ ai nhận được đường dẫn này đều sẽ hiểu ngay tác phẩm là gì và cách nó chuyển động.  */
+#hud{
+  position:absolute;
+  top:calc(env(safe-area-inset-top, 0px) + 18px);
+  left:18px;
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  font-size:11px;
+  line-height:1.5;
+  letter-spacing:.07em;
+  color:var(--muted);
+  text-shadow:0 1px 6px rgba(0,0,0,.85);
+  pointer-events:none;
+  user-select:none;
+}
+#hud .count{color:var(--fg);opacity:.82;}
+#hud .count b{font-weight:500;font-variant-numeric:tabular-nums;}
+#hud .keys{color:var(--muted);}
+#hud .bar{
+  width:34px;height:1px;background:var(--rule);margin:2px 0 3px;
+}
+
+/* ── Lớp phủ tải dữ liệu ─────────────────────────────────────────────── */
+#veil{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  gap:14px;
+  background:var(--bg-deep);
+  transition:opacity .75s ease .12s;
+  z-index:5;
+}
+#veil.gone{opacity:0;pointer-events:none;}
+#veil .dot{
+  width:5px;height:5px;border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 12px 2px rgba(90,130,220,.75);
+  animation:breathe 1.5s ease-in-out infinite;
+}
+@keyframes breathe{0%,100%{opacity:.25;transform:scale(.8);}50%{opacity:1;transform:scale(1.15);}}
+#veil .msg{font-size:11.5px;letter-spacing:.1em;color:var(--muted);font-variant-numeric:tabular-nums;}
+
+#fallback{
+  position:absolute;inset:0;display:none;
+  align-items:center;justify-content:center;
+  padding:24px;text-align:center;
+  font-size:13px;line-height:1.9;color:var(--muted);
+  background:var(--bg);
+}
+#fallback.show{display:flex;}
+
+@media (prefers-reduced-motion: reduce){
+  #veil .dot{animation:none;opacity:.8;}
+  #veil{transition-duration:.01ms;}
+}
+@media (max-width:520px){
+  #hud{font-size:10px;letter-spacing:.05em;}
+}
+</style>
+
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <div id="hud">
+    <span class="count"><b id="pcount">216,760</b> hạt</span>
+    <span class="bar"></span>
+    <span class="keys" id="keys">Kéo để xoay · Cuộn để phóng to</span>
+  </div>
+  <canvas id="greet" aria-label="Happy Birthday"></canvas>
+  <div id="veil"><span class="dot"></span><span class="msg">Đang xếp chồng 216.760 hạt…</span></div>
+  <div id="fallback">WebGL không khả dụng trong trình duyệt trên thiết bị này.，<br>Hình ảnh không hiển thị được.</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.147.0/three.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════════════
+① Phần Cấu hình — Tất cả các giá trị đều được lấy trực tiếp từ "① Phần Cấu hình" trong tệp birthday_cake.py. 
+Hãy sửa đổi các tham số tại đây. Các chú thích lưu lại nguồn gốc của một số giá trị quan trọng — đây là những thiết lập cụ thể, đã được tinh chỉnh kỹ lưỡng thông qua quá trình thử nghiệm và điều chỉnh.
+══════════════════════════════════════════════════════════════════════════ */
+
+const WIN_W = 1000, WIN_H = 800;          // Độ phân giải tham chiếu; tất cả các tham số ở cấp độ điểm ảnh đều được hiệu chuẩn dựa trên thông số này.
+const BG = [0.098, 0.104, 0.125];         // Màu nền (được lấy mẫu từ các góc của hình ảnh tham chiếu)
+
+// —— Số lượng hạt (tổng cộng: 216.760) ——
+const CAKE_COUNT = 82000;
+const PLATE_COUNT = 28000;
+const RING_COUNT = 95000;                 // Vòng lặp phải được vẽ bằng một nét liền duy nhất; không được bỏ sót điểm nào.
+const STAR_COUNT = 1500;
+const FLAME_COUNT = 5200;
+const CANDLE_COUNT = 700;
+const CONFETTI_COUNT = 3000;
+const SPARK_COUNT = 460;
+const NEBULA_COUNT = 900;
+const TOTAL = CAKE_COUNT + PLATE_COUNT + RING_COUNT + STAR_COUNT +
+              FLAME_COUNT + CANDLE_COUNT + CONFETTI_COUNT + SPARK_COUNT + NEBULA_COUNT;
+
+// —— Kích thước hạt (Pixel) ——
+const CAKE_SIZE_RANGE     = [5, 9];
+const PLATE_SIZE_RANGE    = [4, 9];
+const RING_SIZE_RANGE     = [2, 4];
+const FLAME_SIZE_RANGE    = [2, 5];
+const CANDLE_POINT_SIZE   = 4;
+const STAR_SIZE_RANGE     = [1, 2];
+const CONFETTI_SIZE_RANGE = [4, 17];
+const SPARK_SIZE_RANGE    = [9, 22];
+const NEBULA_SIZE_RANGE   = [20, 50];
+
+// —— Kết cấu Point Sprite (được tạo theo thuật toán; không dùng hình ảnh bên ngoài) ——
+const GLOW_TEX_SIZE = 32, GLOW_CORE = 0.38, GLOW_HALO = 1.40;
+const STAR_TEX_SIZE = 32, STAR_TEX_CORE = 0.09, STAR_TEX_ARM = 0.12, STAR_TEX_FALLOFF = 1.5;
+
+// —— Geometries của bánh kem ——
+const CAKE_R = 1.15, CAKE_H = 1.68, CAKE_Y = -1.05;
+const CAKE_TOP_Y = CAKE_Y + CAKE_H;
+const CAKE_TOP_DENSITY = 0.40;
+const PLATE_R = 1.52, PLATE_Y = -1.16, PLATE_RIM_H = 0.075;
+
+// —— Màu bánh kem (lấy từ hình ảnh tham chiếu) ——
+const COL_ROYAL_BLUE   = [0.075, 0.145, 0.40];
+const COL_MID_BLUE     = [0.26, 0.44, 1.00];
+const SPECK_COLORS = [
+  [1.00,0.93,0.74], [1.00,0.93,0.74], [1.00,0.93,0.74],
+  [1.00,0.82,0.36], [0.80,0.88,1.00], [1.00,0.76,0.92],
+];
+const CAKE_SPECK_RATIO = 0.024;
+const COL_GOLD_LIGHT  = [0.90, 0.66, 0.24];
+const COL_CREAM       = [1.00, 0.94, 0.90];
+const COL_CREAM_EDGE  = [1.00, 0.78, 0.44];
+const COL_CREAM_GOLD  = [1.00, 0.76, 0.30];
+const COL_PLATE       = [0.64, 0.68, 0.86];
+const COL_PLATE_EDGE  = [0.74, 0.75, 0.92];
+const GOLD_BAND_START = 0.58, GOLD_BAND_SPAN = 0.42;
+const CAKE_SIDE_ALPHA = [0.70, 0.76];
+const CAKE_TOP_ALPHA  = [0.66, 0.75];
+const PLATE_ALPHA     = [0.60, 0.70];
+
+// —— Pháo giấy ——
+const CONFETTI_ALPHA = [0.30, 0.68];
+const CONFETTI_COLORS = [
+  [0.30,0.60,1.00], [0.40,0.90,1.00], [1.00,0.80,0.30],
+  [1.00,0.60,0.20], [1.00,0.55,0.82], [0.95,0.96,1.00],
+];
+const CONFETTI_SPRAY = [-1.55, 0.95, 0.6];
+const CONFETTI_SPRAY_R = 1.45, CONFETTI_SPRAY_RATIO = 0.28;
+const SPARK_COLOR = [1.00, 0.86, 0.42], SPARK_ALPHA = [0.55, 0.95];
+
+// —— Hào quang ——
+const RING_WIDTH = 0.0085;
+// Mỗi mặt phẳng quỹ đạo = (độ nghiêng, độ cao tâm, tỷ lệ của mặt phẳng, các sợi riêng lẻ nằm trong mặt phẳng đó)
+// Mỗi sợi = (bán kính, màu sắc, phạm vi độ trong suốt, tỷ lệ của sợi đó trong mặt phẳng)
+const RING_PLANES = [
+  {tilt: 22.0, y0:  0.72, share: 0.28, strands: [
+    {radius:1.420, rgb:[0.90,0.94,1.00], a:[0.29,0.41], share:0.62},
+    {radius:1.438, rgb:[0.62,0.74,1.00], a:[0.13,0.20], share:0.38},
+  ]},
+  {tilt: 22.0, y0: -0.42, share: 0.26, strands: [
+    {radius:1.372, rgb:[1.00,0.80,0.34], a:[0.30,0.45], share:0.58},
+    {radius:1.354, rgb:[0.80,0.84,1.00], a:[0.13,0.20], share:0.42},
+  ]},
+  {tilt:-20.0, y0:  0.12, share: 0.24, strands: [
+    {radius:1.520, rgb:[1.00,0.74,0.92], a:[0.15,0.22], share:1.00},
+  ]},
+  {tilt: 42.0, y0: -0.14, share: 0.22, strands: [
+    {radius:1.480, rgb:[0.96,0.86,0.62], a:[0.10,0.15], share:1.00},
+  ]},
+];
+
+// -- Nến --
+const CANDLE_POS = [0, CAKE_TOP_Y, 0];
+const CANDLE_R = 0.055, CANDLE_H = 0.62;
+const CANDLE_COLOR = [1.00, 0.62, 0.86], CANDLE_STRIPE = [1.00, 0.92, 0.98];
+const CANDLE_ALPHA = [0.62, 0.95];
+
+// —— Ngọn lửa ——
+const FLAME_POS = [0, CAKE_TOP_Y + CANDLE_H, 0];
+const FLAME_HEIGHT = 0.68, FLAME_BASE_R = 0.18;
+const FLAME_COL_BOTTOM = [1.00, 0.98, 0.72];
+const FLAME_COL_MID    = [1.00, 0.72, 0.16];
+const FLAME_COL_TOP    = [1.00, 0.30, 0.02];
+const FLAME_RISE = [0.7, 1.5], FLAME_JITTER = 0.020, FLAME_SWIRL = 1.2;
+const FLAME_DRIFT = 0.02, FLAME_TAPER = 1.10, FLAME_ALPHA = [0.22, 0.48];
+
+// —— Các ngôi sao nền ——
+const STAR_RADIUS = [8, 15], STAR_ALPHA = [0.25, 0.80], STAR_TWINKLE = [0.9, 2.4];
+
+// —— Hoạt ảnh ——
+const ROT_SPEED = 18.0;                   // Tốc độ xoay của bánh (độ/giây)
+const RING_WAVE_AMP = 0.075, RING_WAVE_SPEED = 1.9;
+const RING_BREATH = 0.022,  RING_BREATH_SPEED = 1.3;
+const RING_SPIN = -14.0;                  // Dấu âm = đảo ngược chiều quay
+const FLOAT_AMP = 0.03, FLOAT_FREQ = [0.5, 2.4];
+
+// —— Nền tinh vân ——
+const NEBULA_RADIUS = [3, 11], NEBULA_ALPHA = [0.025, 0.055];
+const NEBULA_COLORS = [[0.55,0.20,1.0],[0.15,0.30,1.0],[0.70,0.20,0.95]];
+
+// -- Ánh sáng --
+const BLOOM_THRESHOLD = 0.55, BLOOM_GAIN = 1.20;
+const BLOOM_SIGMA_NEAR = 3.0, BLOOM_SIGMA_FAR = 6.5;
+const BLOOM_W_ORIGINAL = 0.94, BLOOM_W_NEAR = 0.33, BLOOM_W_FAR = 0.18;
+
+// -- CAMERA --
+const CAM_DIST_START = 6.6;
+const CAM_ZOOM_MIN = 3.0 / CAM_DIST_START, CAM_ZOOM_MAX = 20.0 / CAM_DIST_START;
+const CAM_PITCH_START = 19.0, CAM_PITCH_MIN = -85.0, CAM_PITCH_MAX = 85.0;
+const DRAG_SENS = 0.32, ZOOM_SENS = 0.6;
+const FOV = 45.0, NEAR = 0.1, FAR = 100.0;
+const CAM_FIT_HALF_W = 1.95;              // Đảm bảo độ rộng một nửa này vừa với màn hình khi hiển thị trên không gian hẹp (bán kính vòng tròn là 1,52)
+
+const SEED = 20240913;                    // Cố định hạt giống ngẫu nhiên (random seed): kết quả luôn giống nhau mỗi khi mở lên
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+② Các công cụ đa năng — tương ứng với `default_rng` trong NumPy
+══════════════════════════════════════════════════════════════════════════ */
+
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let rnd = mulberry32(SEED);
+
+function uni(a, b, n){                    // rng.uniform(a, b, n)
+  const o = new Float64Array(n);
+  for (let i = 0; i < n; i++) o[i] = a + (b - a) * rnd();
+  return o;
+}
+function unif(n){ const o = new Float64Array(n); for (let i=0;i<n;i++) o[i]=rnd(); return o; }
+function nrm(mu, sd, n){                  // rng.normal(mu, sd, n)
+  const o = new Float64Array(n);
+  for (let i = 0; i < n; i++){
+    const u1 = rnd() || 1e-12, u2 = rnd();
+    o[i] = mu + sd * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  }
+  return o;
+}
+function randSizes(n, range){             // Làm tròn và phân loại
+  const o = new Float32Array(n);
+  for (let i = 0; i < n; i++) o[i] = Math.round(range[0] + (range[1] - range[0]) * rnd());
+  return o;
+}
+function pickIndices(n, k){               // rng.choice(n, k, replace=False)
+  const idx = new Int32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  for (let i = 0; i < k; i++){
+    const j = i + Math.floor(rnd() * (n - i));
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  return idx.subarray(0, k);
+}
+const clip01 = v => v < 0 ? 0 : (v > 1 ? 1 : v);
+
+function gaussianWeights(sigma, sigmasOut){
+  const half = Math.max(1, Math.ceil(sigma * sigmasOut));
+  const w = new Float64Array(half * 2 + 1);
+  let sum = 0;
+  for (let i = -half; i <= half; i++){
+    const v = Math.exp(-(i * i) / (2 * sigma * sigma));
+    w[i + half] = v; sum += v;
+  }
+  for (let i = 0; i < w.length; i++) w[i] /= sum;
+  return {w: w, half: half};
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+③ Các hàm tạo hạt (Particle Generation Functions) — Toán học thuần túy; tương ứng trực tiếp với birthday_cake.py
+Mỗi hệ thống tạo ra:
+pos  Float32Array(n*3)   Vị trí
+col  Float32Array(n*4)   RGB + Alpha (màu sắc và độ trong suốt)
+size Float32Array(n)     Kích thước (tính bằng pixel trên màn hình)
+anim Float32Array(n*4)   Pha/tần số chuyển động, tần số/pha nhấp nháy
+══════════════════════════════════════════════════════════════════════════ */
+
+function makeSys(n){
+  return { n:n, pos:new Float32Array(n*3), col:new Float32Array(n*4),
+           size:new Float32Array(n), anim:new Float32Array(n*4) };
+}
+// Gán các tham số trôi nổi/ấp lánh cho từng hạt trong toàn bộ nhóm
+function fillAnim(sys, freqRange){
+  for (let i = 0; i < sys.n; i++){
+    sys.anim[i*4  ] = rnd() * Math.PI * 2;                                   // Giai đoạn
+    sys.anim[i*4+1] = FREQ_LO + (FREQ_HI - FREQ_LO) * rnd();                 // Tần số thả nổi
+    sys.anim[i*4+2] = freqRange ? freqRange[0] + (freqRange[1]-freqRange[0])*rnd() : 0;
+    sys.anim[i*4+3] = freqRange ? rnd() * Math.PI * 2 : 0;
+  }
+}
+const FREQ_LO = 0.5, FREQ_HI = 2.4;
+
+
+/* Phân bố các điểm trên bề mặt một hình trụ; trả về giá trị theta và chiều cao đã chuẩn hóa để phục vụ việc tô màu vân đá cẩm thạch dựa trên vị trí */
+function cylinderSide(n, radius, yBottom, height){
+  const th = new Float64Array(n), yj = nrm(0, 0.006, n);
+  const pos = new Float32Array(n * 3), yn = new Float32Array(n);
+  for (let i = 0; i < n; i++){
+    const t = th[i] = rnd() * Math.PI * 2;
+    const y = yBottom + (height) * rnd();
+    const r = radius * (1 + yj[i]);
+    pos[i*3] = r * Math.cos(t); pos[i*3+1] = y; pos[i*3+2] = r * Math.sin(t);
+    yn[i] = (y - yBottom) / Math.max(height, 1e-6);
+  }
+  return {pos:pos, th:th, yn:yn};
+}
+
+/* Phân bố các điểm trên mặt phẳng ngang (theo diện tích đều, nên bán kính lấy căn bậc hai) */
+function disc(n, radius, yPlane, yJitter){
+  const u = new Float64Array(n), th = new Float64Array(n), yj = nrm(0, yJitter, n);
+  const pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++){
+    const t = th[i] = rnd() * Math.PI * 2;
+    const uu = u[i] = Math.sqrt(rnd());
+    const r = radius * uu;
+    pos[i*3] = r * Math.cos(t); pos[i*3+1] = yPlane + yj[i]; pos[i*3+2] = r * Math.sin(t);
+  }
+  return {pos:pos, u:u, th:th};
+}
+
+/* Họa tiết ở các mặt bên: nền màu xanh hoàng gia với những mảng loang tựa như những đám mây, phía trên là một dải màu vàng—tại một điểm trên dải này có sự xuất hiện của ký hiệu θ. 
+Cách phối màu được định vị cố định chứ không phải ngẫu nhiên, vì vậy họa tiết sẽ xoay theo chính vật thể đó. */
+function marbleRGB(th, yn){
+  const n = th.length, out = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++){
+    const t = th[i], y = yn[i];
+
+    // Sự chồng chập của ba sóng hình sin tần số thấp: khi θ và độ cao có cùng bậc độ lớn, đồng thời lưới gần như là hình vuông, thì dạng thu được sẽ bao gồm các đốm tròn.
+    const cloud = 0.50 * Math.sin(2.0*t + 1.1*y*Math.PI + 0.4)
+                + 0.32 * Math.sin(3.7*t - 1.9*y*Math.PI + 2.3)
+                + 0.18 * Math.sin(1.3*t + 3.1*y*Math.PI - 1.2);
+    const blueT = Math.pow(clip01(0.5 + 0.80 * cloud), 1.4);
+
+    // Lớp vàng chỉ xuất hiện trong 40 phần trăm phía trên, và độ dày của nó được điều biến bởi một sóng chậm.
+    const band  = Math.pow(clip01((y - GOLD_BAND_START) / GOLD_BAND_SPAN), 1.5);
+    const drip  = 0.5 + 0.5 * Math.sin(2.6*t + 1.7*y*Math.PI + 0.9);
+    const goldT = clip01(band * (0.20 + 1.25 * drip)) * 0.72;
+
+    // Độ dốc dọc của ánh sáng lên và tối xuống: bề mặt trên cùng là nguồn sáng và phần trên của cột được chiếu sáng bởi nó
+    const grad = (0.52 + 0.60 * y) * (0.95 + 0.05 * rnd());
+
+    for (let c = 0; c < 3; c++){
+      const base = COL_ROYAL_BLUE[c] * (1 - blueT) + COL_MID_BLUE[c] * blueT;
+      out[i*3+c] = clip01((base * (1 - goldT) + COL_GOLD_LIGHT[c] * goldT) * grad);
+    }
+  }
+  return out;
+}
+
+
+/* ── Thân bánh: Dạng hình trụ thấp một tầng ───────────────────────────────────────── */
+function makeCake(){
+  const sideArea = 2 * Math.PI * CAKE_R * CAKE_H;
+  const topArea  = Math.PI * CAKE_R * CAKE_R;
+  const nTop  = Math.floor(CAKE_COUNT * topArea / (sideArea + topArea) * CAKE_TOP_DENSITY);
+  const nSide = CAKE_COUNT - nTop;
+  const sys = makeSys(CAKE_COUNT);
+
+// —— Góc nhìn từ bên ——
+  const cs = cylinderSide(nSide, CAKE_R, CAKE_Y, CAKE_H);
+  const rgb = marbleRGB(cs.th, cs.yn);
+  sys.pos.set(cs.pos.subarray(0, nSide*3), 0);
+  for (let i = 0; i < nSide; i++){
+    const a = CAKE_SIDE_ALPHA[0] + (CAKE_SIDE_ALPHA[1]-CAKE_SIDE_ALPHA[0]) * rnd();
+    sys.col[i*4]   = rgb[i*3];
+    sys.col[i*4+1] = rgb[i*3+1];
+    sys.col[i*4+2] = rgb[i*3+2];
+    sys.col[i*4+3] = a;
+  }
+// Hiệu ứng lấp lánh từ mica: Chủ đạo là tông màu trắng ấm, điểm xuyết các sắc vàng, xanh dương nhạt và hồng. Độ trong suốt được thiết lập gần bằng 1—độ trong suốt cao là yếu tố then chốt để hiệu ứng lấp lánh thực sự nổi bật.
+  const nSpeck = Math.floor(nSide * CAKE_SPECK_RATIO);
+  const idx = pickIndices(nSide, nSpeck);
+  for (let k = 0; k < nSpeck; k++){
+    const i = idx[k], c = SPECK_COLORS[Math.floor(rnd() * SPECK_COLORS.length)];
+    const m = 0.85 + 0.15 * rnd();
+    sys.col[i*4] = c[0]*m; sys.col[i*4+1] = c[1]*m; sys.col[i*4+2] = c[2]*m;
+    sys.col[i*4+3] = 0.85 + 0.15 * rnd();
+  }
+  const sSide = randSizes(nSide, CAKE_SIZE_RANGE);
+  sys.size.set(sSide, 0);
+
+// —— Bề mặt trên: Nền trắng kem điểm xuyết các dải màu vàng uốn lượn — tạo nên từ hai lượt quét sóng tần số thấp — cùng một vòng viền vàng chạy dọc theo mép ngoài cùng ——
+  const t = disc(nTop, CAKE_R, CAKE_TOP_Y, 0.006);
+  sys.pos.set(t.pos, nSide * 3);
+  for (let i = 0; i < nTop; i++){
+    const T = t.th[i], u = t.u[i];
+    const sw = 0.55 * Math.sin(2.3*T + 3.2*u*Math.PI + 0.7)
+             + 0.45 * Math.sin(3.9*T - 5.1*u*Math.PI + 2.4);
+    const mix = clip01((sw + 0.10) / 0.40) * 0.82;
+    const e = clip01((u - 0.82) / 0.18);
+    const m = 0.95 + 0.05 * rnd();
+    for (let c = 0; c < 3; c++){
+      const v = COL_CREAM[c] * (1 - mix) + COL_CREAM_GOLD[c] * mix;
+      sys.col[(nSide+i)*4+c] = clip01((v * (1 - e) + COL_CREAM_EDGE[c] * e) * m);
+    }
+    sys.col[(nSide+i)*4+3] = CAKE_TOP_ALPHA[0] + (CAKE_TOP_ALPHA[1]-CAKE_TOP_ALPHA[0]) * rnd();
+  }
+  sys.size.set(randSizes(nTop, CAKE_SIZE_RANGE), nSide);
+
+  fillAnim(sys);
+  return {sys:sys, floatAmp:FLOAT_AMP};
+}
+
+
+/* ── Đế: Một đĩa tròn, phẳng, có kích thước lớn hơn chiếc bánh, với các cạnh hơi cong lên trên ───────────────── */
+function makePlate(){
+  const nFace = Math.floor(PLATE_COUNT * 0.88), nRim = PLATE_COUNT - nFace;
+  const sys = makeSys(PLATE_COUNT);
+
+  const f = disc(nFace, PLATE_R * 0.93, PLATE_Y, 0.004);
+  sys.pos.set(f.pos, 0);
+  for (let i = 0; i < nFace; i++){
+    // Bề mặt đĩa chủ yếu là phẳng, chỉ có một chút ánh sáng tích tụ ở mép ngoài —— nếu cho quá nhiều sẽ trở thành một chiếc bánh甜甜圈 khác
+    const m = 0.92 + 0.08 * rnd();
+    for (let c = 0; c < 3; c++) sys.col[i*4+c] = COL_PLATE[c] * m;
+    const a = PLATE_ALPHA[0] + (PLATE_ALPHA[1]-PLATE_ALPHA[0]) * rnd();
+    sys.col[i*4+3] = clip01(a * (0.92 + 0.16 * f.u[i]));
+  }
+  sys.size.set(randSizes(nFace, PLATE_SIZE_RANGE), 0);
+
+  // Vành đĩa: một vòng tròn có bán kính thu hẹp, hơi vểnh lên, chỉ sáng hơn bề mặt đĩa một bậc
+  const rrj = nrm(0, 0.012, nRim);
+  for (let i = 0; i < nRim; i++){
+    const idx = nFace + i;
+    const th = rnd() * Math.PI * 2;
+    const r = PLATE_R * (1 + rrj[i]);
+    const y = PLATE_Y + PLATE_RIM_H * Math.pow(rnd(), 2);
+    sys.pos[idx*3] = r * Math.cos(th);
+    sys.pos[idx*3+1] = y;
+    sys.pos[idx*3+2] = r * Math.sin(th);
+    const m = 0.85 + 0.15 * rnd();
+    for (let c = 0; c < 3; c++) sys.col[idx*4+c] = COL_PLATE_EDGE[c] * m;
+    sys.col[idx*4+3] = PLATE_ALPHA[1] * (1.05 + 0.40 * rnd());
+  }
+  sys.size.set(randSizes(nRim, PLATE_SIZE_RANGE), nFace);
+
+  fillAnim(sys);
+  return {sys:sys, floatAmp:0.0};
+}
+
+
+/* ── Các vòng hào quang (Halos): Một chuỗi các dải cong, nghiêng với độ rộng thay đổi ─────────────────────────
+Các tham số hình học (θ, độ nghiêng, bán kính/chiều cao tham chiếu và pha) đều được truyền vào shader
+và tính toán lại trên GPU trong mỗi khung hình—sự chuyển động của các đỉnh sóng dọc theo những đường cong này
+tạo nên hiệu ứng giống như những "dải ruy-băng đang phấp phới." */
+function makeRing(){
+  const sys = makeSys(RING_COUNT);
+  const A = new Float32Array(RING_COUNT * 4);   // y0, r, theta, ct
+  const B = new Float32Array(RING_COUNT * 4);   // st, ph_v, ph_r, amp
+
+  const shareSum = RING_PLANES.reduce((s,p) => s + p.share, 0);
+  const planeN = RING_PLANES.map(p => Math.floor(p.share / shareSum * RING_COUNT));
+  planeN[planeN.length-1] = RING_COUNT - planeN.slice(0,-1).reduce((a,b)=>a+b,0);
+
+  let w = 0;
+  for (let pi = 0; pi < RING_PLANES.length; pi++){
+    const P = RING_PLANES[pi], pn = planeN[pi];
+    const sw = P.strands.reduce((s,x) => s + x.share, 0);
+    const cts = P.strands.map(x => Math.floor(x.share / sw * pn));
+    cts[cts.length-1] = pn - cts.slice(0,-1).reduce((a,b)=>a+b,0);
+
+    const tilt = P.tilt * Math.PI / 180, ct = Math.cos(tilt), st = Math.sin(tilt);
+   // Mỗi mặt phẳng quỹ đạo đều có tập hợp các pha riêng: nếu những nhấp nhô của cả bốn vành đai cùng hội tụ tại một điểm, chúng sẽ tạo thành một hệ thống các vành đai "hô hấp" một cách đồng bộ.
+    const ph = [rnd()*Math.PI*2, rnd()*Math.PI*2, rnd()*Math.PI*2, rnd()*Math.PI*2];
+    const amp = RING_WAVE_AMP * (0.62 + 0.55 * Math.abs(Math.sin(ph[0])));
+
+    for (let si = 0; si < P.strands.length; si++){
+      const S = P.strands[si], cnt = cts[si];
+      const th = uni(0, Math.PI*2, cnt);
+      const g1 = nrm(0, 1, cnt), g2 = nrm(0, 1, cnt);
+      const sz = randSizes(cnt, RING_SIZE_RANGE);
+      const aMid = 0.5 * (S.a[0] + S.a[1]), aHalf = 0.5 * (S.a[1] - S.a[0]);
+
+      for (let i = 0; i < cnt; i++, w++){
+        const T = th[i];
+        // Áp lực bút (nhấc lên và nhấn xuống): dao động từ mức tối thiểu 0,08× đến mức tối đa 1,41×; không có cực trị nào chạm đến mức bằng không — nét vẽ có thể trở nên rất mảnh, nhưng tuyệt đối không được đứt đoạn.
+        const taper = Math.pow(0.5 + 0.5*Math.sin(2.1*T + ph[0]), 1.5);
+        const thin  = 0.5 + 0.5*Math.sin(3.6*T + ph[1]);
+        const width = RING_WIDTH * (0.18 + 1.05*taper) * (0.45 + 0.70*thin);
+        const r = S.radius * (1 + 0.020*Math.sin(3.0*T + ph[2])) + g1[i]*width;
+        const y = P.y0 + 0.045*Math.sin(2.0*T + ph[3]) + g2[i]*(RING_WIDTH*0.7);
+        const z = r * Math.sin(T);
+
+        sys.pos[w*3]   = r * Math.cos(T);
+        sys.pos[w*3+1] = y*ct - z*st;
+        sys.pos[w*3+2] = y*st + z*ct;
+
+       // Độ sáng và độ tối thay đổi dọc theo chiều dài cung, với hai sợi nằm lệch nhau: trên cùng một đoạn của cung, một sợi sáng trong khi sợi kia tối.
+        const wave = 0.5 + 0.5*Math.sin(2.6*T + ph[0] + si*2.1);
+        const m = 0.92 + 0.08 * rnd();
+        sys.col[w*4]   = S.rgb[0]*m;
+        sys.col[w*4+1] = S.rgb[1]*m;
+        sys.col[w*4+2] = S.rgb[2]*m;
+        sys.col[w*4+3] = clip01((aMid + (rnd()*0.6 - 0.3)*aHalf) *
+                                (0.06 + 1.75*Math.pow(wave, 1.6)));
+        sys.size[w] = sz[i];
+
+        A[w*4] = y; A[w*4+1] = r; A[w*4+2] = T; A[w*4+3] = ct;
+        B[w*4] = st; B[w*4+1] = ph[3] + Math.PI*1.7;
+        B[w*4+2] = ph[2] + Math.PI*0.9; B[w*4+3] = amp;
+      }
+    }
+  }
+  fillAnim(sys);
+  return {sys:sys, floatAmp:0.0, ringA:A, ringB:B};
+}
+
+
+/* ── Nến: hình trụ mảnh, màu hồng với các sọc dọc màu nhạt ───────────────────────────── */
+function makeCandle(){
+  const n = CANDLE_COUNT, sys = makeSys(n);
+  const jr = nrm(0, 0.05, n);
+  for (let i = 0; i < n; i++){
+    const th = rnd() * Math.PI * 2;
+    const r = CANDLE_R * (1 + jr[i]);
+    const y = CANDLE_POS[1] + rnd() * CANDLE_H;
+    sys.pos[i*3] = CANDLE_POS[0] + r * Math.cos(th);
+    sys.pos[i*3+1] = y;
+    sys.pos[i*3+2] = CANDLE_POS[2] + r * Math.sin(th);
+    // Sáu dải màu bao quanh cột; các khu vực gần phần đỉnh có màu sáng. Các vùng chuyển tiếp được mở rộng, với tông nền hơi trắng, trong khi sắc hồng chỉ xuất hiện dưới dạng các dải màu.
+    const t = clip01((Math.sin(th*6.0) - 0.05) / 0.75);
+    const m = 0.85 + 0.15 * rnd();
+    for (let c = 0; c < 3; c++)
+      sys.col[i*4+c] = (CANDLE_COLOR[c]*(1-t) + CANDLE_STRIPE[c]*t) * m;
+    sys.col[i*4+3] = CANDLE_ALPHA[0] + (CANDLE_ALPHA[1]-CANDLE_ALPHA[0]) * rnd();
+    sys.size[i] = CANDLE_POINT_SIZE;
+  }
+  fillAnim(sys);
+  return {sys:sys, floatAmp:0.0};
+}
+
+
+/* ── Các ngôi sao nền: những lớp vỏ hình cầu với bán kính từ 8–15, tạo hiệu ứng lấp lánh ─────────────────────────── */
+function makeStars(){
+  const n = STAR_COUNT, sys = makeSys(n);
+  for (let i = 0; i < n; i++){
+    const u = rnd()*2 - 1, th = rnd()*Math.PI*2;
+    const rxy = Math.sqrt(Math.max(0, 1 - u*u));
+    const rad = STAR_RADIUS[0] + (STAR_RADIUS[1]-STAR_RADIUS[0]) * rnd();
+    sys.pos[i*3]   = rxy * Math.cos(th) * rad;
+    sys.pos[i*3+1] = u * rad;
+    sys.pos[i*3+2] = rxy * Math.sin(th) * rad;
+    const t = rnd();                              // Trắng → Xanh dương nhạt
+    sys.col[i*4]   = 1.0 * (1-t) + 0.72 * t;
+    sys.col[i*4+1] = 1.0 * (1-t) + 0.85 * t;
+    sys.col[i*4+2] = 1.0 * (1-t) + 1.00 * t;
+    sys.col[i*4+3] = STAR_ALPHA[0] + (STAR_ALPHA[1]-STAR_ALPHA[0]) * rnd();
+    sys.size[i] = Math.round(STAR_SIZE_RANGE[0] +
+                  (STAR_SIZE_RANGE[1]-STAR_SIZE_RANGE[0]) * rnd());
+  }
+  fillAnim(sys, STAR_TWINKLE);
+  return {sys:sys, floatAmp:0.0, twinkle:true};
+}
+
+
+/* ── Làn sương tinh vân (Nebula Mist): Một vài thành phần quy mô lớn với độ mờ rất thấp, được sử dụng để tạo thêm chiều sâu cho phần nền ─────────── */
+function makeNebula(maxPointSize){
+  const n = NEBULA_COUNT, sys = makeSys(n);
+  const lim = Math.max(4, Math.min(maxPointSize, 50));
+  for (let i = 0; i < n; i++){
+    const u = rnd()*2 - 1, th = rnd()*Math.PI*2;
+    const rxy = Math.sqrt(Math.max(0, 1 - u*u));
+    const rad = NEBULA_RADIUS[0] + (NEBULA_RADIUS[1]-NEBULA_RADIUS[0]) * rnd();
+    sys.pos[i*3]   = rxy * Math.cos(th) * rad;
+    sys.pos[i*3+1] = u * 0.7 * rad;
+    sys.pos[i*3+2] = rxy * Math.sin(th) * rad;
+    const c = NEBULA_COLORS[Math.floor(rnd() * NEBULA_COLORS.length)];
+    const m = 0.7 + 0.3 * rnd();
+    sys.col[i*4] = c[0]*m; sys.col[i*4+1] = c[1]*m; sys.col[i*4+2] = c[2]*m;
+    sys.col[i*4+3] = NEBULA_ALPHA[0] + (NEBULA_ALPHA[1]-NEBULA_ALPHA[0]) * rnd();
+    sys.size[i] = Math.min(Math.round(NEBULA_SIZE_RANGE[0] +
+                  (NEBULA_SIZE_RANGE[1]-NEBULA_SIZE_RANGE[0]) * rnd()), lim);
+  }
+  fillAnim(sys);
+  return {sys:sys, floatAmp:0.0};
+}
+
+
+/* ── Confetti: Với dải kích thước đa dạng, sự tương phản giữa các yếu tố thưa và dày, mờ và sắc nét được tạo ra ────────────────── */
+function makeConfetti(){
+  const n = CONFETTI_COUNT, sys = makeSys(n);
+  const nSpray = Math.floor(n * CONFETTI_SPRAY_RATIO);
+  for (let i = 0; i < n; i++){
+    let x, y, z;
+    if (i < nSpray){                              // Cụm ở góc trên bên trái, hội tụ về phía trung tâm
+      const u = rnd()*2 - 1, th = rnd()*Math.PI*2;
+      const rxy = Math.sqrt(Math.max(0, 1 - u*u));
+      const rad = CONFETTI_SPRAY_R * Math.pow(rnd(), 0.6);
+      x = rxy*Math.cos(th)*rad + CONFETTI_SPRAY[0];
+      y = u*rad + CONFETTI_SPRAY[1];
+      z = rxy*Math.sin(th)*rad + CONFETTI_SPRAY[2];
+    } else {                                      // Số còn lại tạo thành một lớp vỏ hình elip bao quanh tiệm bánh.
+      const u = rnd()*2 - 1, th = rnd()*Math.PI*2;
+      const rxy = Math.sqrt(Math.max(0, 1 - u*u));
+      const rad = 1.3 + (3.4 - 1.3) * rnd();
+      x = rxy*Math.cos(th)*rad; y = u*1.05*rad; z = rxy*Math.sin(th)*rad;
+    }
+    sys.pos[i*3] = x; sys.pos[i*3+1] = y; sys.pos[i*3+2] = z;
+    const c = CONFETTI_COLORS[Math.floor(rnd() * CONFETTI_COLORS.length)];
+    const m = 0.85 + 0.15 * rnd();
+    sys.col[i*4] = c[0]*m; sys.col[i*4+1] = c[1]*m; sys.col[i*4+2] = c[2]*m;
+    sys.col[i*4+3] = CONFETTI_ALPHA[0] + (CONFETTI_ALPHA[1]-CONFETTI_ALPHA[0]) * rnd();
+  }
+  sys.size.set(randSizes(n, CONFETTI_SIZE_RANGE));
+  fillAnim(sys);
+  return {sys:sys, floatAmp:FLOAT_AMP * 1.6};   // Những mảnh giấy màu trông nổi bật hơn chiếc bánh một chút.
+}
+
+
+/* ── Hiệu ứng lấp lánh hình sao bốn cánh: màu vàng, tạo hình bằng kết cấu ngôi sao, kèm hiệu ứng nhấp nháy ─────────────────── */
+function makeSparks(){
+  const n = SPARK_COUNT, sys = makeSys(n);
+  for (let i = 0; i < n; i++){
+    const u = rnd()*2 - 1, th = rnd()*Math.PI*2;
+    const rxy = Math.sqrt(Math.max(0, 1 - u*u));
+    const rad = 1.3 + (2.7 - 1.3) * rnd();     // Giữ trong phạm vi 2,7; nếu ném xa quá, nó sẽ rơi ra ngoài khung hình.
+    sys.pos[i*3]   = rxy * Math.cos(th) * rad;
+    sys.pos[i*3+1] = u * 0.8 * rad;
+    sys.pos[i*3+2] = rxy * Math.sin(th) * rad;
+    const m = 0.85 + 0.15 * rnd();
+    sys.col[i*4] = SPARK_COLOR[0]*m; sys.col[i*4+1] = SPARK_COLOR[1]*m;
+    sys.col[i*4+2] = SPARK_COLOR[2]*m;
+    sys.col[i*4+3] = SPARK_ALPHA[0] + (SPARK_ALPHA[1]-SPARK_ALPHA[0]) * rnd();
+  }
+  sys.size.set(randSizes(n, SPARK_SIZE_RANGE));
+  fillAnim(sys, [0.8, 2.0]);
+  return {sys:sys, floatAmp:FLOAT_AMP * 2.0, twinkle:true};
+}
+
+
+/* ── Ngọn lửa: Hình dáng giọt nước (nhọn ở phía trên, rộng ở phía dưới); một vòng đời luân chuyển qua các giai đoạn: trôi dạt, biến mất và tái sinh ───── */
+const flame = {
+  life: null, theta: null, rad: null, rate: null, phase: null,
+  baseRGB: new Float32Array(FLAME_COUNT * 3),
+  pos: new Float32Array(FLAME_COUNT * 3),
+  col: new Float32Array(FLAME_COUNT * 4),
+  size: null,
+};
+function makeFlame(){
+  const n = FLAME_COUNT;
+  flame.life  = new Float32Array(n);
+  flame.theta = new Float32Array(n);
+  flame.rad   = new Float32Array(n);
+  flame.rate  = new Float32Array(n);
+  flame.phase = new Float32Array(n);
+  for (let i = 0; i < n; i++){
+    const l = rnd();
+    flame.life[i]  = l;
+    flame.theta[i] = rnd() * Math.PI * 2;
+    flame.rad[i]   = Math.sqrt(rnd());
+    flame.rate[i]  = FLAME_RISE[0] + (FLAME_RISE[1]-FLAME_RISE[0]) * rnd();
+    flame.phase[i] = rnd() * Math.PI * 2;
+    // Thiết lập màu sắc dựa trên giá trị 'life': vàng tươi ở phía dưới → cam ở giữa → đỏ ở phía trên
+    for (let c = 0; c < 3; c++){
+      flame.baseRGB[i*3+c] = l < 0.5
+        ? FLAME_COL_BOTTOM[c] + (FLAME_COL_MID[c]-FLAME_COL_BOTTOM[c]) * (l/0.5)
+        : FLAME_COL_MID[c] + (FLAME_COL_TOP[c]-FLAME_COL_MID[c]) * ((l-0.5)/0.5);
+      flame.col[i*4+c] = flame.baseRGB[i*3+c];
+    }
+  }
+  flame.size = randSizes(n, FLAME_SIZE_RANGE);
+}
+
+function updateFlame(t, dt){
+  const n = flame.n || FLAME_COUNT;
+  const life = flame.life, th = flame.theta, rad = flame.rad,
+        rate = flame.rate, ph = flame.phase, pos = flame.pos, col = flame.col;
+  const [fx, fy, fz] = FLAME_POS;
+  for (let i = 0; i < n; i++){
+    let l = life[i] + rate[i] * dt;
+    l -= Math.floor(l);                       // Khi chạm đến đỉnh, hãy quay trở lại đáy và tái tạo.
+    life[i] = l;
+    // Hình giọt nước: Bắt đầu bằng cách thu nhỏ dần gần phần gốc bấc, sau đó phình rộng ra, rồi lại thu hẹp dần để tạo thành một đầu nhọn.
+    const bulge = 0.55 + 0.45 * Math.min(1, l / 0.15);
+    const r = FLAME_BASE_R * rad[i] * Math.pow(1 - l, FLAME_TAPER) * bulge
+            + FLAME_DRIFT * l * l;
+    const ang = th[i] + t * FLAME_SWIRL + l * 2.0;
+    pos[i*3]   = fx + Math.cos(ang)*r + FLAME_JITTER*Math.sin(t*17.0 + ph[i]);
+    pos[i*3+1] = fy + l * FLAME_HEIGHT;
+    pos[i*3+2] = fz + Math.sin(ang)*r + FLAME_JITTER*Math.cos(t*19.0 + ph[i]);
+    // Sáng nhất ở phía dưới và mờ dần về phía trên; một giá trị ngẫu nhiên mới được tạo ra trong mỗi khung hình để tạo hiệu ứng nhấp nháy.
+    const fadeIn  = clip01(l / 0.10);
+    const fadeOut = 1 - Math.pow(clip01((l - 0.45) / 0.55), 1.6);
+    col[i*4+3] = clip01(fadeIn * fadeOut *
+                        (FLAME_ALPHA[0] + (FLAME_ALPHA[1]-FLAME_ALPHA[0]) * Math.random()));
+  }
+}
+flame.n = FLAME_COUNT;
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+④ Các kết cấu Point Sprite (Point Sprite Textures) — Được tạo bằng lập trình; không sử dụng hình ảnh bên ngoài
+══════════════════════════════════════════════════════════════════════════ */
+function makeGlowTexture(){
+  const S = GLOW_TEX_SIZE, c = (S - 1) * 0.5, d = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++){
+    for (let x = 0; x < S; x++){
+      const r = Math.min(1, Math.hypot(x - c, y - c) / c);
+      // Độ dốc (gradient) phải bao phủ toàn bộ bán kính của kết cấu (texture); nếu độ dốc chỉ giới hạn ở phần viền ngoài, quá trình lấy mẫu giảm độ phân giải (downsampled sampling) sẽ bị bỏ qua.
+      const halo = Math.pow(clip01(1 - r*r), GLOW_HALO);
+      const core = Math.pow(clip01((GLOW_CORE - r) / GLOW_CORE), 0.85);
+      const a = clip01(halo * 0.80 + core * 0.45);
+      const i = (y * S + x) * 4;
+      d[i] = d[i+1] = d[i+2] = 255;           // Màu trắng; được tô màu thông qua màu đỉnh (vertex colors)
+      d[i+3] = Math.round(a * 255);
+    }
+  }
+  return d;
+}
+
+function makeStarTexture(){
+  const S = STAR_TEX_SIZE, c = (S - 1) * 0.5, d = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++){
+    for (let x = 0; x < S; x++){
+      const dx = (x - c) / c, dy = (y - c) / c;
+      const r = Math.hypot(dx, dy);
+      const core = clip01(1 - r / STAR_TEX_CORE);
+      // Việc nâng tiết diện lên lũy thừa 0,6 giúp "tăng cường" sự suy giảm tuyến tính, đảm bảo rằng hiệu ứng tỏa sáng (starburst) không bị mất đi do quá trình lấy mẫu xuống (downsampling).
+      const armH = Math.pow(clip01(1 - Math.abs(dy)/STAR_TEX_ARM), 0.6) *
+                   Math.pow(clip01(1 - Math.abs(dx)), STAR_TEX_FALLOFF);
+      const armV = Math.pow(clip01(1 - Math.abs(dx)/STAR_TEX_ARM), 0.6) *
+                   Math.pow(clip01(1 - Math.abs(dy)), STAR_TEX_FALLOFF);
+      const a = clip01(Math.max(core, armH, armV));
+      const i = (y * S + x) * 4;
+      d[i] = d[i+1] = d[i+2] = 255;
+      d[i+3] = Math.round(a * 255);
+    }
+  }
+  return d;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+⑤ Shader
+══════════════════════════════════════════════════════════════════════════ */
+
+// Được sử dụng chung cho các điểm phát sáng và các bề mặt đặc: đối với các bề mặt đặc,
+// `uUseMap` được đặt thành 0, và các điểm hình vuông sẽ lấp đầy các ô lưới tương ứng.
+// `uPremul` dành riêng cho các bề mặt đặc: trong cách triển khai gốc, thao tác
+// `col.rgb *= col.a` được thực hiện cho nhóm "bề mặt đặc", kết hợp với
+// `glBlendFunc(GL_ONE, GL_ZERO)` để ghi đè lên nội dung cũ. Nếu thiếu bước này,
+// chiếc bánh sẽ sáng hơn khoảng 37% (1/0,73) — vượt ngưỡng phát sáng (bloom threshold),
+// khiến toàn bộ phần thân hình trụ tự phát ra ánh sáng.
+const POINT_VS = `
+attribute vec4 aColor;
+attribute float aSize;
+attribute vec4 aAnim;
+uniform float uDpr, uTime, uFloatAmp, uTwinkle, uPremul;
+varying vec4 vColor;
+void main(){
+  vec3 p = position;
+  p.y += uFloatAmp * sin(uTime * aAnim.y + aAnim.x);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  gl_PointSize = aSize * uDpr;
+  float a = aColor.a;
+  if (uTwinkle > 0.5) a *= 0.55 + 0.45 * sin(uTime * aAnim.z + aAnim.w);
+  // 闪烁只改 alpha，所以先算 rgb 再算 a，两者互不干扰
+  vColor = vec4(aColor.rgb * mix(1.0, aColor.a, uPremul), a);
+}`;
+
+const POINT_FS = `
+uniform sampler2D uMap;
+uniform float uUseMap;
+varying vec4 vColor;
+void main(){
+  vec4 c = vColor;
+  if (uUseMap > 0.5) c *= texture2D(uMap, gl_PointCoord);
+  gl_FragColor = c;
+}`;
+
+// Hiệu ứng hào quang (halo effect): Hình học được tính toán lại theo từng khung hình trong bộ đổ bóng đỉnh (vertex shader), với sự xuất hiện của hai sóng lan truyền.
+const RING_VS = `
+attribute vec4 aColor;
+attribute float aSize;
+attribute vec4 aRingA;     // y0, r, theta, ct
+attribute vec4 aRingB;     // st, ph_v, ph_r, amp
+uniform float uDpr, uTime, uWaveSpeed, uBreath, uBreathSpeed;
+varying vec4 vColor;
+void main(){
+  float th = aRingA.z;
+  float yy = aRingA.x + aRingB.w * sin(2.0*th - uWaveSpeed*uTime + aRingB.y);
+  float rr = aRingA.y * (1.0 + uBreath * sin(3.0*th + uBreathSpeed*uTime + aRingB.z));
+  float zz = rr * sin(th);
+  vec3 p = vec3(rr*cos(th), yy*aRingA.w - zz*aRingB.x, yy*aRingB.x + zz*aRingA.w);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  gl_PointSize = aSize * uDpr;
+  vColor = aColor;
+}`;
+
+const QUAD_VS = `
+varying vec2 vUv;
+void main(){
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
+
+const BRIGHT_FS = `
+uniform sampler2D uScene;
+uniform float uGain, uThreshold;
+varying vec2 vUv;
+void main(){
+  // 先乘增益再减阈值，结果夹到 0 —— 只有真正亮的东西该过阈值
+  gl_FragColor = vec4(clamp(texture2D(uScene, vUv).rgb * uGain - uThreshold, 0.0, 1.0), 1.0);
+}`;
+
+const COMPOSITE_FS = `
+uniform sampler2D uScene, uNear, uFar;
+uniform vec3 uW;
+varying vec2 vUv;
+void main(){
+  // 合成是加法不是插值，所以原图权重接近 1，辉光是叠上去的
+  vec3 c = texture2D(uScene, vUv).rgb * uW.x;
+  c += texture2D(uNear, vUv).rgb * uW.y;
+  c += texture2D(uFar,  vUv).rgb * uW.z;
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+// Gaussian tách biệt: Nhúng trực tiếp các trọng số vào mã nguồn, nhờ đó loại bỏ nhu cầu sử dụng các mảng đồng nhất (uniform arrays) và vòng lặp.
+function blurFragment(weights, half){
+  let s = `uniform sampler2D uSrc;\nuniform vec2 uStep;\nvarying vec2 vUv;\nvoid main(){\n` +
+          `  vec4 acc = texture2D(uSrc, vUv) * ${weights[half].toFixed(7)};\n`;
+  for (let i = 0; i < weights.length; i++){
+    if (i === half) continue;
+    s += `  acc += texture2D(uSrc, vUv + uStep * ${(i - half).toFixed(1)}) * ${weights[i].toFixed(7)};\n`;
+  }
+  return s + `  gl_FragColor = vec4(acc.rgb, 1.0);\n}`;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+⑥ Thiết lập site
+══════════════════════════════════════════════════════════════════════════ */
+
+let renderer, scene, camera, quadScene, quadCam, quadMesh, quadMat = {};
+let rtScene, rtBright, rtBlurA, rtBlurB, rtFarA, rtFarB;
+let glowTex, starTex;
+let groups = [];
+let dpr = 1, bloomW = 1, bloomH = 1;
+
+function isWebGLAvailable(){
+  try {
+    const c = document.createElement('canvas');
+    return !!(window.WebGLRenderingContext &&
+              (c.getContext('webgl2') || c.getContext('webgl')));
+  } catch(e){ return false; }
+}
+
+function makeTex(data, size, mipmap){
+  const t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.generateMipmaps = mipmap;
+  // Các kiểu hình tia sáng (starburst patterns) là những chi tiết ở quy mô rất nhỏ; bản chất của kỹ thuật mipmapping là khi một hình ảnh bị thu nhỏ, các điểm ảnh lân cận sẽ được tính giá trị trung bình—và chính những "tia sáng" đó đã bị triệt tiêu thông qua quá trình lấy giá trị trung bình này.
+  t.minFilter = mipmap ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
+}
+
+function makeTarget(w, h, withDepth){
+  return new THREE.WebGLRenderTarget(Math.max(1, w|0), Math.max(1, h|0), {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: !!withDepth,
+    stencilBuffer: false,
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+  });
+}
+
+function buildPointMaterial(useMap, twinkle, floatAmp, tex, premul){
+  const m = new THREE.ShaderMaterial({
+    vertexShader: POINT_VS,
+    fragmentShader: POINT_FS,
+    uniforms: {
+      uDpr:      {value: dpr},
+      uTime:     {value: 0},
+      uFloatAmp: {value: floatAmp},
+      uTwinkle:  {value: twinkle ? 1 : 0},
+      uPremul:   {value: premul ? 1 : 0},
+      uUseMap:   {value: useMap ? 1 : 0},
+      uMap:      {value: tex || null},
+    },
+    // Các bề mặt đặc (solid surfaces): GL_ONE/GL_ZERO có nghĩa là "màu nguồn ghi đè trực tiếp lên [màu đích]"—tương đương với `NoBlending` trong Three.js.
+    transparent: !!useMap,
+    depthTest: true,
+    depthWrite: !useMap,
+    depthFunc: THREE.LessDepth,          // Phải ÍT: những người đến sau có độ sâu bằng nhau sẽ bị chặn.
+    blending: useMap ? THREE.AdditiveBlending : THREE.NoBlending,
+  });
+  return m;
+}
+
+function buildPoints(sys, opts){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(sys.pos, 3));
+  g.setAttribute('aColor',   new THREE.BufferAttribute(sys.col, 4));
+  g.setAttribute('aSize',    new THREE.BufferAttribute(sys.size, 1));
+  g.setAttribute('aAnim',    new THREE.BufferAttribute(sys.anim, 4));
+  if (opts.ringA){
+    g.setAttribute('aRingA', new THREE.BufferAttribute(opts.ringA, 4));
+    g.setAttribute('aRingB', new THREE.BufferAttribute(opts.ringB, 4));
+  }
+  const pts = new THREE.Points(g, opts.material);
+  pts.frustumCulled = false;             // Điểm này không có khung bao, và hình học của vòng đang chuyển động.
+  pts.renderOrder = opts.renderOrder;
+  return pts;
+}
+
+function build(){
+  // — Kết cấu Point Sprite —
+  glowTex = makeTex(makeGlowTexture(), GLOW_TEX_SIZE, true);
+  starTex = makeTex(makeStarTexture(), STAR_TEX_SIZE, false);
+
+  const gl = renderer.getContext();
+  const maxPt = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] || 32;
+
+  // — Tạo các hạt —
+  const cake   = makeCake();
+  const plate  = makePlate();
+  const ring   = makeRing();
+  const candle = makeCandle();
+  const stars  = makeStars();
+  const nebula = makeNebula(maxPt);
+  const conf   = makeConfetti();
+  const sparks = makeSparks();
+  makeFlame();
+  updateFlame(0, 0);
+
+  // —— Các bề mặt đặc ——
+  const mkSolid = (amp) => buildPointMaterial(false, false, amp, null, true);
+  // —— Các vật phát sáng ——
+  const mkGlow = (tw, amp, tex) => buildPointMaterial(true, tw, amp, tex, false);
+
+  const matCake   = mkSolid(cake.floatAmp);
+  const matPlate  = mkSolid(0);
+  const matCandle = mkSolid(0);
+  const matNeb    = mkGlow(false, 0, glowTex);
+  const matStar   = mkGlow(true, 0, glowTex);
+  const matConf   = mkGlow(false, conf.floatAmp, glowTex);
+  const matSpark  = mkGlow(true, sparks.floatAmp, starTex);
+  const matFlame  = mkGlow(false, 0, glowTex);
+  matFlame.depthTest = false;            // Ngọn lửa là một thể tích; nếu cố gắng thể hiện chiều sâu của nó, bạn sẽ vô tình biến nó thành một lớp vỏ rỗng tuếch.
+
+  const matRing = new THREE.ShaderMaterial({
+    vertexShader: RING_VS,
+    fragmentShader: POINT_FS,
+    uniforms: {
+      uDpr:         {value: dpr},
+      uTime:        {value: 0},
+      uWaveSpeed:   {value: RING_WAVE_SPEED},
+      uBreath:      {value: RING_BREATH},
+      uBreathSpeed: {value: RING_BREATH_SPEED},
+      uUseMap:      {value: 1},
+      uMap:         {value: glowTex},
+    },
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    depthFunc: THREE.LessDepth,
+    blending: THREE.AdditiveBlending,
+  });
+
+  // —— Cấu trúc phân cấp cảnh (Scene Tree) ——
+  // Bánh / Đĩa / Nến / Các hạt trong không gian (ambient particles): Tất cả cùng xoay quanh trục Y.
+  // Các hạt trong không gian phải được đặt làm đối tượng con (parented) của nhóm này — nếu đặt chúng ra bên ngoài, chiếc bánh sẽ xoay trong khi hậu cảnh vẫn đứng yên hoàn toàn; 
+  // điều này tạo cảm giác như chiếc bánh đang xoay trước một phông nền tĩnh, khiến hiệu ứng chiều sâu không gian bị phá vỡ ngay lập tức.
+  const spinning = new THREE.Group();
+  const ringGroup = new THREE.Group();
+  const flameGroup = new THREE.Group();
+
+  const add = (sys, opt) => {
+    const p = buildPoints(sys, opt);
+    (opt.parent || spinning).add(p);
+    groups.push({obj: p, material: opt.material, kind: opt.kind});
+    return p;
+  };
+
+  add(cake.sys,   {material: matCake,   renderOrder: 0, kind: 'cake'});
+  add(plate.sys,  {material: matPlate,  renderOrder: 1, kind: 'plate'});
+  add(candle.sys, {material: matCandle, renderOrder: 2, kind: 'candle'});
+  add(nebula.sys, {material: matNeb,    renderOrder: 3, kind: 'static'});
+  add(stars.sys,  {material: matStar,   renderOrder: 4, kind: 'static'});
+  add(conf.sys,   {material: matConf,   renderOrder: 5, kind: 'static'});
+  add(sparks.sys, {material: matSpark,  renderOrder: 6, kind: 'static'});
+
+  const ringPts = buildPoints(ring.sys, {
+    material: matRing, renderOrder: 7, ringA: ring.ringA, ringB: ring.ringB});
+  ringGroup.add(ringPts);
+
+  // Ngọn lửa: Không đi sâu vào bên trong; luôn chỉ dừng lại ở bề mặt.
+  const fg = new THREE.BufferGeometry();
+  fg.setAttribute('position', new THREE.BufferAttribute(flame.pos, 3).setUsage(THREE.DynamicDrawUsage));
+  fg.setAttribute('aColor',   new THREE.BufferAttribute(flame.col, 4).setUsage(THREE.DynamicDrawUsage));
+  fg.setAttribute('aSize',    new THREE.BufferAttribute(flame.size, 1));
+  fg.setAttribute('aAnim',    new THREE.BufferAttribute(new Float32Array(FLAME_COUNT*4), 4));
+  const flamePts = new THREE.Points(fg, matFlame);
+  flamePts.frustumCulled = false;
+  flamePts.renderOrder = 8;
+  flameGroup.add(flamePts);
+
+  const flameRef = {geo: fg, obj: flamePts};
+
+  scene.add(spinning); scene.add(ringGroup); scene.add(flameGroup);
+
+  return {
+    spinning: spinning, ringGroup: ringGroup, flameGroup: flameGroup,
+    flameRef: flameRef,
+    mats: [matCake, matPlate, matCandle, matNeb, matStar, matConf,
+           matSpark, matFlame, matRing],
+  };
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+⑦ Hậu xử lý Bloom — Trích xuất độ sáng → Làm mờ ở độ phân giải đầy đủ (vùng gần) → Làm mờ ở độ phân giải một nửa (vùng xa) → Tổng hợp
+══════════════════════════════════════════════════════════════════════════ */
+
+let blurNearH, blurNearV, blurFarH, blurFarV;
+
+function buildPost(){
+  const geo = new THREE.PlaneGeometry(2, 2);
+
+  quadMat.bright = new THREE.ShaderMaterial({
+    vertexShader: QUAD_VS, fragmentShader: BRIGHT_FS,
+    uniforms: {uScene:{value:null}, uGain:{value:BLOOM_GAIN}, uThreshold:{value:BLOOM_THRESHOLD}},
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+  });
+
+  const wn = gaussianWeights(BLOOM_SIGMA_NEAR, 3.0);
+  const wf = gaussianWeights(BLOOM_SIGMA_FAR, 3.0);
+  const mkBlur = (weights, half) => new THREE.ShaderMaterial({
+    vertexShader: QUAD_VS, fragmentShader: blurFragment(weights.w, half),
+    uniforms: {uSrc:{value:null}, uStep:{value:new THREE.Vector2()}},
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+  });
+  blurNearH = mkBlur(wn, wn.half); blurNearV = mkBlur(wn, wn.half);
+  blurFarH  = mkBlur(wf, wf.half); blurFarV  = mkBlur(wf, wf.half);
+
+  quadMat.copy = new THREE.ShaderMaterial({
+    vertexShader: QUAD_VS,
+    fragmentShader: `uniform sampler2D uSrc;varying vec2 vUv;
+      void main(){ gl_FragColor = texture2D(uSrc, vUv); }`,
+    uniforms: {uSrc:{value:null}},
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+  });
+
+  quadMat.composite = new THREE.ShaderMaterial({
+    vertexShader: QUAD_VS, fragmentShader: COMPOSITE_FS,
+    uniforms: {
+      uScene:{value:null}, uNear:{value:null}, uFar:{value:null},
+      uW:{value:new THREE.Vector3(BLOOM_W_ORIGINAL, BLOOM_W_NEAR, BLOOM_W_FAR)},
+    },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+  });
+
+  quadScene = new THREE.Scene();
+  quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  quadMesh = new THREE.Mesh(geo, quadMat.copy);
+  quadMesh.frustumCulled = false;
+  quadScene.add(quadMesh);
+}
+
+function pass(mat, target, clear){
+  quadMesh.material = mat;
+  renderer.setRenderTarget(target);
+  if (clear){
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, false, false);
+  }
+  renderer.render(quadScene, quadCam);
+}
+
+function allocateTargets(){
+  [rtScene, rtBright, rtBlurA, rtBlurB, rtFarA, rtFarB].forEach(rt => rt && rt.dispose());
+
+  const bw = bloomW = Math.max(1, Math.round(cssW));    // Độ sáng (glow) được tính bằng pixel CSS:
+  const bh = bloomH = Math.max(1, Math.round(cssH));    // Ý nghĩa dựa trên điểm ảnh của sigma vẫn không đổi bất kể các thay đổi về màn hình.
+
+  rtScene = makeTarget(devW(), devH(), true);           // Khung cảnh phải có một tệp đính kèm chiều sâu (depth attachment) được gắn vào.
+  rtBright = makeTarget(bw, bh, false);
+  rtBlurA  = makeTarget(bw, bh, false);
+  rtBlurB  = makeTarget(bw, bh, false);
+  rtFarA   = makeTarget(bw >> 1, bh >> 1, false);       // Độ phân giải một nửa ở vùng xa
+  rtFarB   = makeTarget(bw >> 1, bh >> 1, false);
+
+  camera.aspect = cssW / cssH;
+  camera.updateProjectionMatrix();
+  renderer.setRenderTarget(null);
+}
+
+function runBloom(){
+  const g = renderer.getContext();
+
+  // 1) Trích xuất độ chói
+  quadMat.bright.uniforms.uScene.value = rtScene.texture;
+  pass(quadMat.bright, rtBright, true);
+
+  // 2) Lớp trường gần: Độ phân giải đầy đủ, theo phương ngang rồi đến phương dọc
+  blurNearH.uniforms.uSrc.value = rtBright.texture;
+  blurNearH.uniforms.uStep.value.set(1 / bloomW, 0);
+  pass(blurNearH, rtBlurA, true);
+
+  blurNearV.uniforms.uSrc.value = rtBlurA.texture;
+  blurNearV.uniforms.uStep.value.set(0, 1 / bloomH);
+  pass(blurNearV, rtBlurB, true);
+
+  // 3) Lớp xa (Far layer): Giảm độ phân giải xuống còn một nửa trước khi thực hiện làm mờ; thao tác này giúp tăng gấp đôi bán kính hiệu dụng, đồng thời giảm chi phí tính toán xuống còn 1/4.
+  quadMat.copy.uniforms.uSrc.value = rtBright.texture;
+  pass(quadMat.copy, rtFarA, true);
+
+  blurFarH.uniforms.uSrc.value = rtFarA.texture;
+  blurFarH.uniforms.uStep.value.set(1 / Math.max(1, bloomW >> 1), 0);
+  pass(blurFarH, rtFarB, true);
+
+  blurFarV.uniforms.uSrc.value = rtFarB.texture;
+  blurFarV.uniforms.uStep.value.set(0, 1 / Math.max(1, bloomH >> 1));
+  pass(blurFarV, rtFarA, true);
+
+  // 4) Phối hợp có trọng số trên màn hình: Hình ảnh gốc × 0,94 + Lớp gần × 0,33 + Lớp xa × 0,18
+  quadMat.composite.uniforms.uScene.value = rtScene.texture;
+  quadMat.composite.uniforms.uNear.value  = rtBlurB.texture;
+  quadMat.composite.uniforms.uFar.value   = rtFarA.texture;
+  pass(quadMat.composite, null, true);
+  void g;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+⑧ Tương tác và Vòng lặp chính
+══════════════════════════════════════════════════════════════════════════ */
+
+let cssW = WIN_W, cssH = WIN_H;
+let baseDist = CAM_DIST_START;
+let yaw = 0, pitch = CAM_PITCH_START, zoom = 1;
+let angle = 0, ringAngle = 0;
+let started = 0, lastMs = 0;
+let reduceMotion = false;
+let dirty = true;
+let built = null;
+
+function computeBaseDist(){
+  const tanHalf = Math.tan(FOV * Math.PI / 360);
+  const aspect = Math.max(0.05, cssW / cssH);
+  // Lùi camera ra xa trên các màn hình hẹp để đảm bảo chiếc nhẫn và chiếc đĩa nằm gọn trong khung hình theo chiều ngang.
+  return Math.max(CAM_DIST_START, CAM_FIT_HALF_W / (tanHalf * aspect));
+}
+// Kích thước điểm ảnh (pixel) của thiết bị. Mọi thành phần bên trong bộ kết xuất (renderer) đều được tính toán dựa trên các kích thước này; DPR (tỷ lệ điểm ảnh thiết bị - device pixel ratio) chỉ được sử dụng tại một nơi duy nhất: `gl_PointSize`.
+const devW = () => Math.max(1, Math.round(cssW * dpr));
+const devH = () => Math.max(1, Math.round(cssH * dpr));
+
+function updateCamera(){
+  const d = baseDist * zoom;
+  const p = pitch * Math.PI / 180, y = yaw * Math.PI / 180;
+  camera.position.set(-Math.cos(p) * Math.sin(y) * d,
+                       Math.sin(p) * d,
+                       Math.cos(p) * Math.cos(y) * d);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(0, 0, 0);
+}
+
+/* ── Lời chào ─────────────────────────────────────────────────────
+Trong chương trình gốc, văn bản được hiển thị *sau* khi hiệu ứng tỏa sáng (bloom)
+được áp dụng (kiểm tra độ sâu — depth test — cũng bị vô hiệu hóa khi quá trình
+tạo hiệu ứng bloom kết thúc). Do đó, bản thân văn bản không chịu ảnh hưởng
+bởi hiệu ứng bloom; sắc xanh lam tỏa sáng thực chất đã được "nhúng" sẵn
+vào kết cấu (texture). Quy trình bên trong hàm `build_text_surface()`
+diễn ra như sau:
+
+① Màu viền (90, 130, 220) được vẽ bốn lần, mỗi lần với một độ lệch
+(offset) khác nhau: (-2, 0), (2, 0), (0, -2) và (0, 2). Tất cả các thao tác
+này đều sử dụng `BLEND_RGBA_ADD` — tức là hòa trộn cộng dồn (additive blending),
+thay vì ghi đè lên nhau.
+② Toàn bộ hình ảnh tổng hợp được thu nhỏ xuống còn 1/8 kích thước ban đầu,
+rồi sau đó phóng to trở lại (hai thao tác `smoothscale` này đóng vai trò
+như một bước làm mờ — blur pass). Kết quả này cũng được áp dụng thông qua
+hòa trộn cộng dồn, tạo nên lớp sương mờ màu xanh lam bao quanh văn bản.
+③ Cuối cùng, phần văn bản chính (235, 240, 255) được vẽ đè lên trên bằng
+phương pháp hòa trộn alpha (alpha blending) tiêu chuẩn.
+
+Khi được hiển thị (blit) lên màn hình, kết quả sử dụng chế độ
+`SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA` (hòa trộn alpha tiêu chuẩn). Vì vậy,
+nếu thực hiện các bước tương tự trên một bề mặt vẽ (canvas) riêng biệt,
+rồi sau đó đưa bề mặt đó lên màn hình bằng chế độ hòa trộn mặc định,
+ta sẽ thu được kết quả hoàn toàn giống hệt.
+
+Tại sao không sử dụng `text-shadow`? `text-shadow` dựa trên cơ chế hòa trộn alpha; 
+nếu xếp chồng nhiều lớp lên nhau, màu sắc sẽ dần hội tụ về phía màu viền,
+khiến cho việc đạt được màu trắng thuần khiết trở nên bất khả thi. Trong
+hình ảnh tham khảo, cường độ cao nhất của văn bản đạt đến giá trị 255 —
+một kết quả chỉ có thể đạt được thông qua hòa trộn cộng dồn. */
+
+const GREET_TEXT     = 'Happy Birthday';   // Chữ chính
+const GREET_SIZE     = 64;                 // Cỡ chữ chính (px)
+const GREET_MARGIN   = 42;                 // Khoảng cách từ mép chữ đến mép canvas (px)
+const GREET_CORE_RGB = [235, 240, 255];    // Màu chữ chính
+const GREET_GLOW_RGB = [ 90, 130, 220];    // Màu viền chữ
+// Chúng ta không thể sử dụng phông chữ "Figtree" có trên trang web, cũng không thể mặc định chọn "Arial". Chương trình gốc sử dụng:
+//     pygame.font.SysFont("arial,segoeui,helvetica,dejavusans", 64, bold=True)
+// Tuy nhiên, trên máy tính này, `pygame.match_font("arial")` lại trỏ đến `ARIALN.TTF` — tức là **Arial Narrow**, chứ không phải Arial tiêu chuẩn:
+//     match_font('arial') -> C:\Windows\Fonts\ARIALN.TTF
+//     render('Happy Birthday') -> 387 x 74
+// Kết quả này khớp với chiều rộng 389 pixel đo được từ hình ảnh tham chiếu. Nếu sử dụng "Arial Bold" tiêu chuẩn, chiều rộng sẽ lên tới 473 pixel — rộng hơn khoảng 20% ​​— khiến văn bản trông quá dày và hiệu ứng phát sáng (glow effect) trở nên nhòe nhoẹt, khác biệt đáng kể so với hình ảnh tham chiếu.
+// Do đó, chuỗi dự phòng (fallback chain) phải ưu tiên nghiêm ngặt các biến thể "narrow" (hẹp); tuyệt đối không được để hệ thống tự chuyển sang Arial tiêu chuẩn, vì điều đó sẽ làm tăng chiều rộng văn bản thêm 20%.
+// Đối với Linux, chúng ta sử dụng "Liberation Sans Narrow", trong khi với các nền tảng khác, chúng ta sử dụng "Roboto Condensed" từ Google Fonts (có chiều rộng bằng khoảng 0,82 lần so với Arial tiêu chuẩn — gần như tương đương với Arial Narrow).
+const GREET_WEIGHT   = 700;
+const GREET_FAMILY   = '"Arial Narrow", "Liberation Sans Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif';
+
+// Dòng dưới đây dành riêng cho một cá nhân cụ thể; tính chất của nó khác với lời chào chung ở phía trên:
+// Dòng phía trên cần được căn chỉnh theo hình ảnh tham chiếu, trong khi dòng này là phần bổ sung—hãy chọn kích thước phông chữ sao cho hài hòa về mặt thị giác.
+// Với 12 ký tự (độ rộng đầy đủ) cùng hai chữ số, việc đặt tỷ lệ ở mức 0,42x sẽ giúp dòng này hẹp hơn một chút so với dòng phía trên, tạo nên bố cục tựa như hình kim tự tháp.
+// Để thay đổi tên hoặc tuổi, bạn chỉ cần chỉnh sửa dòng này; tất cả các thông số khác (như kích thước phông chữ tối thiểu và việc không sử dụng hiệu ứng phát sáng) sẽ tự động cập nhật theo.
+const GREET_SUB        = 'CHÚC MỪNG SINH NHẬT !!!'; //Chữ phụ
+const GREET_SUB_RATIO  = 0.42;   // Cỡ chữ phụ = cỡ chữ chính * tỉ lệ này
+const GREET_SUB_GAP    = 0.34;   // Khoảng cách từ dòng chính đến dòng phụ = cỡ chữ chính * tỉ lệ này
+const GREET_SUB_WEIGHT = 700;
+// Các ký tự tiếng Trung có giới hạn tối thiểu về khả năng đọc, trong khi các chữ cái Latinh thì không: dòng phía trên vẫn có thể đọc được ngay cả khi thu nhỏ xuống kích thước 19px,
+// trong khi dòng này—nếu được thu nhỏ theo tỷ lệ tương ứng xuống còn 8px—sẽ trở nên không thể đọc được. Vì các liên kết này chủ yếu được truy cập thông qua thiết bị di động,
+// nên kích thước phông chữ cho dòng này trước tiên được tính toán theo tỷ lệ, sau đó được điều chỉnh để đảm bảo không nhỏ hơn một mức tối thiểu tuyệt đối nhất định (đồng thời có thể áp dụng thêm các điều chỉnh dựa trên chiều rộng màn hình nếu thiết bị có màn hình cực kỳ hẹp).
+const GREET_SUB_MIN_PX = 20;
+// Chuỗi dự phòng nội dung hẹp ở trên không thể được sử dụng bằng tiếng Trung - cả Arial Narrow và Roboto Condensed đều không có ký tự Trung Quốc.
+// Trình duyệt sẽ tìm thấy phông chữ mặc định ở trên cùng, trọng lượng và phông chữ của phông chữ không thể kiểm soát được. Mỗi nền tảng được viết đậm rõ ràng ở đây.
+const GREET_SUB_FAMILY = '"Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif';
+
+// Dòng chính: Bản dịch nguyên văn, từng dòng một từ quy trình `build_text_surface` gốc — không một ký tự nào bị thay đổi.
+// Tham số `size` được tính theo đơn vị pixel CSS; các bitmap được kết xuất ở kích thước `size * s` (trong đó `s` là tỷ lệ pixel thiết bị - device pixel ratio). Điều này đảm bảo sự nhất quán với cảnh WebGL, vốn cũng được kết xuất dựa trên các pixel thiết bị. Nếu không có cơ chế này, trên một chiếc điện thoại có tỷ lệ pixel thiết bị (DPR) bằng 2, toàn bộ hình ảnh sẽ hiển thị sắc nét, ngoại trừ lời chào ở chính giữa — phần này trông sẽ bị mờ. Khi `s = 1`, tất cả các giá trị số bên dưới sẽ trở về đúng các giá trị tuyệt đối đã được sử dụng trong chương trình gốc.
+function buildGreetGlow(size, s){
+  const px = size * s;
+  const pad = Math.round(Math.max(8, Math.floor(size / 3)) * s);   // max(8, size//3)
+  const font = GREET_WEIGHT + ' ' + px + 'px ' + GREET_FAMILY;
+
+  // Trước tiên, hãy đo kích thước ký tự: sử dụng `fontBoundingBox*` (thành phần phản ánh các chỉ số độ vươn lên/hạ xuống—ascent/descent—của chính phông chữ đó; đây cũng chính là hệ thống được dùng để xác định chiều cao trả về bởi `pygame.font.render`). Nếu cách này không thành công, hãy chuyển sang sử dụng khung bao quanh ký tự (glyph bounding box).
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = font;
+  const m = probe.measureText(GREET_TEXT);
+  const tw = Math.ceil(m.width);
+  const asc  = Math.ceil(m.fontBoundingBoxAscent  || m.actualBoundingBoxAscent  || px * 0.90);
+  const desc = Math.ceil(m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || px * 0.25);
+
+  const W = tw + pad * 2, H = asc + desc + pad * 2;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.font = font;
+  g.textBaseline = 'alphabetic';
+  const bx = pad, by = pad + asc;                  // Đường cơ sở
+
+  // ① Thêm đường viền bằng cách dịch chuyển theo bốn hướng (mã gốc sử dụng bốn độ dịch chuyển ±2px)
+  const d = Math.max(1, Math.round(2 * s));
+  g.globalCompositeOperation = 'lighter';
+  g.fillStyle = 'rgb(' + GREET_GLOW_RGB.join(',') + ')';
+  const off = [[-d, 0], [d, 0], [0, -d], [0, d]];
+  for (let i = 0; i < off.length; i++) g.fillText(GREET_TEXT, bx + off[i][0], by + off[i][1]);
+
+  // ② Thu nhỏ xuống còn 1/8 rồi phóng to trở lại, sử dụng chế độ hòa trộn cộng (additive blending) — thao tác này tạo ra lớp sương mờ, nhạt bao quanh rìa bên ngoài.
+  const sw = Math.max(1, W >> 3), sh = Math.max(1, H >> 3);
+  const small = document.createElement('canvas');
+  small.width = sw; small.height = sh;
+  const sg = small.getContext('2d');
+  sg.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in sg) sg.imageSmoothingQuality = 'high';
+  sg.drawImage(cv, 0, 0, sw, sh);
+  g.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
+  g.drawImage(small, 0, 0, sw, sh, 0, 0, W, H);
+
+  // ③ Văn bản đơn sắc được đặt ở lớp trên cùng, sử dụng kỹ thuật hòa trộn alpha tiêu chuẩn
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = 'rgb(' + GREET_CORE_RGB.join(',') + ')';
+  g.fillText(GREET_TEXT, bx, by);
+
+  return cv;   // Kích thước bitmap = Kích thước CSS * s
+}
+
+// Dòng ký tự tiếng Trung **không** được thiết lập hiệu ứng phát sáng (glow); các ký tự ở dạng đặc (solid).
+// Tôi đã thử áp dụng quy trình tạo hiệu ứng "phát sáng" giống như với dòng ký tự chính, nhưng kết quả không đạt yêu cầu: các ký tự tiếng Trung có nét vẽ dày đặc và lấp đầy toàn bộ khung bao (bounding box) của chúng,
+// vì vậy hiệu ứng phát sáng sẽ lấp đầy cả những khoảng trống giữa các nét vẽ, khiến toàn bộ dòng ký tự trở nên nhòe đi thành một khối không thể đọc được. Các ký tự dạng đặc là dễ đọc nhất.
+// Khoảng lề nhỏ được thêm vào chỉ để đảm bảo rằng phần nửa pixel dùng cho kỹ thuật khử răng cưa (anti-aliasing) không bị cắt mất — nó hoàn toàn không nhằm mục đích tạo hiệu ứng phát sáng.
+function buildGreetSolid(text, size, weight, family, s){
+  const px = size * s;
+  const pad = Math.max(1, Math.round(px * 0.06));
+  const font = weight + ' ' + px + 'px ' + family;
+
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = font;
+  const m = probe.measureText(text);
+  const asc  = Math.ceil(m.fontBoundingBoxAscent  || m.actualBoundingBoxAscent  || px * 0.90);
+  const desc = Math.ceil(m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || px * 0.25);
+
+  const cv = document.createElement('canvas');
+  cv.width = Math.ceil(m.width) + pad * 2;
+  cv.height = asc + desc + pad * 2;
+  const g = cv.getContext('2d');
+  g.font = font;
+  g.textBaseline = 'alphabetic';
+  g.fillStyle = 'rgb(' + GREET_CORE_RGB.join(',') + ')';
+  g.fillText(text, pad, pad + asc);
+  return cv;
+}
+
+// Mỗi đường trong hai đường kẻ được hiển thị độc lập rồi mới kết hợp lại thành một hình ảnh duy nhất. Tại sao không sử dụng một khung vẽ (canvas) chung? Bởi vì hiệu ứng phát sáng cần được xác định
+// trước bước làm mờ; một khi cả hai đường đã được gộp vào cùng một bitmap, ta không thể áp dụng hiệu ứng làm mờ mà chỉ loại trừ một trong hai đường đó ra được.
+// Đường kẻ chính sẽ trải qua toàn bộ quy trình tạo hiệu ứng phát sáng, trong khi đường kẻ chứa ký tự tiếng Trung chỉ đơn thuần được đặt chồng lên trên—nhờ đó đảm bảo chúng không gây ảnh hưởng lẫn nhau.
+function buildGreet(size, subSize, s){
+  const main = buildGreetGlow(size, s);
+  if (!GREET_SUB) return main;
+
+  const sub = buildGreetSolid(GREET_SUB, subSize, GREET_SUB_WEIGHT, GREET_SUB_FAMILY, s);
+  const gap = Math.round(size * GREET_SUB_GAP * s);
+
+  const W = Math.max(main.width, sub.width);
+  const H = main.height + gap + sub.height;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  // Cả hai đường kẻ đều được căn giữa theo chiều ngang; đường kẻ hẹp hơn không được phép bị đẩy sang bên trái.
+  g.drawImage(main, Math.round((W - main.width) / 2), 0);
+  g.drawImage(sub,  Math.round((W - sub.width)  / 2), main.height + gap);
+  return cv;   // Kích thước bitmap = Kích thước CSS * s
+}
+
+function fitText(){
+  const el = document.getElementById('greet');
+  if (!el) return;
+
+  // Chương trình gốc sử dụng cửa sổ cố định kích thước 1000x800, với cỡ chữ là 64 và khoảng cách từ cạnh dưới là 42 — cả hai đều được xác định theo đơn vị pixel tuyệt đối.
+  // Nếu màn hình nhỏ hơn các kích thước cơ sở này, mọi thành phần sẽ được thu nhỏ theo tỷ lệ tương ứng. Ngoài ra, một "hệ số camera" cũng được áp dụng: trên các màn hình hẹp hơn, camera sẽ lùi ra xa
+  // để đảm bảo toàn bộ chiếc bánh vẫn nằm trong khung hình; văn bản cũng được thu nhỏ theo, duy trì các tỷ lệ tương đối như ban đầu. Tại kích thước 1000x800, cả hai hệ số này đều bằng 1,
+  // dẫn đến cỡ chữ đúng bằng 64 và khoảng cách từ cạnh dưới đúng bằng 42 — khớp chính xác từng pixel với hình ảnh tham chiếu.
+  const k = Math.min(cssW / WIN_W, cssH / WIN_H, 1) * (CAM_DIST_START / baseDist);
+  const size = Math.max(18, Math.round(GREET_SIZE * k));
+  // Đối với dòng chữ tiếng Trung, trước tiên hãy tính toán kích thước theo tỷ lệ, sau đó điều chỉnh tăng lên mức GREET_SUB_MIN_PX.
+  // Tuy nhiên, nếu màn hình quá hẹp để hiển thị trọn vẹn dòng chữ, hãy ưu tiên tận dụng chiều rộng hiện có—thà để văn bản thu nhỏ lại một chút còn hơn là kích hoạt cơ chế co rút bố cục, vốn sẽ khiến toàn bộ khối nội dung bị thu nhỏ theo tỷ lệ.
+  const subFit  = Math.floor(cssW * 0.86 / GREET_SUB.length);
+  const subSize = Math.min(
+    Math.max(Math.round(size * GREET_SUB_RATIO), GREET_SUB_MIN_PX),
+    Math.max(12, subFit)
+  );
+  const s = Math.max(1, dpr);
+
+  const src = buildGreet(size, subSize, s);
+  const cw = src.width / s, ch = src.height / s;    // Kích thước trong CSS
+
+  if (el.width !== src.width || el.height !== src.height){
+    el.width = src.width; el.height = src.height;
+  }
+  const g = el.getContext('2d');
+  g.clearRect(0, 0, el.width, el.height);
+  g.drawImage(src, 0, 0);
+  el.style.width  = cw + 'px';
+  el.style.height = ch + 'px';
+
+  // Tiếp tục thu nhỏ dựa trên chiều rộng để đảm bảo hình ảnh không bị tràn trên các màn hình hẹp (toàn bộ hình ảnh được thu nhỏ theo tỷ lệ, không cần vẽ lại)
+  const maxW = cssW * 0.88;
+  if (cw > maxW){
+    el.style.width  = maxW + 'px';
+    el.style.height = (ch * maxW / cw) + 'px';
+  }
+  el.style.setProperty('--greet-bottom', Math.max(10, GREET_MARGIN * k) + 'px');
+}
+
+function onResize(){
+  cssW = Math.max(1, window.innerWidth);
+  cssH = Math.max(1, window.innerHeight);
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // Giới hạn tổng số điểm ảnh trên các màn hình siêu lớn để tránh việc tốc độ lấp đầy (fill rate) làm sụt giảm tốc độ khung hình.
+  const want = cssW * cssH * dpr * dpr, cap = 3.2e6;
+  if (want > cap) dpr = Math.max(1, dpr * Math.sqrt(cap / want));
+
+  renderer.setSize(devW(), devH(), false);
+  baseDist = computeBaseDist();
+  allocateTargets();
+
+  built.mats.forEach(m => { if (m.uniforms.uDpr) m.uniforms.uDpr.value = dpr; });
+  fitText();
+  dirty = true;
+}
+
+function bindInput(canvas){
+  const pointers = new Map();
+  let dragging = false, lastX = 0, lastY = 0, pinchDist = 0;
+
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    if (pointers.size === 1){
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      canvas.classList.add('dragging');
+    } else if (pointers.size === 2){
+      const [a, b] = [...pointers.values()];
+      pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    if (pointers.size === 2){
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0){
+        zoom = Math.min(CAM_ZOOM_MAX, Math.max(CAM_ZOOM_MIN, zoom * pinchDist / d));
+      }
+      pinchDist = d; dirty = true; return;
+    }
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    yaw += dx * DRAG_SENS;
+    pitch = Math.min(CAM_PITCH_MAX, Math.max(CAM_PITCH_MIN, pitch + dy * DRAG_SENS));
+    dirty = true;
+  });
+
+  const end = e => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
+    if (pointers.size === 0){ dragging = false; canvas.classList.remove('dragging'); }
+    if (pointers.size === 1){ const p = [...pointers.values()][0]; lastX = p.x; lastY = p.y; }
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoom = Math.min(CAM_ZOOM_MAX, Math.max(CAM_ZOOM_MIN, zoom * Math.exp(e.deltaY * 0.0008)));
+    dirty = true;
+  }, {passive:false});
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft')  { yaw -= 4; dirty = true; }
+    if (e.key === 'ArrowRight') { yaw += 4; dirty = true; }
+    if (e.key === 'ArrowUp')    { pitch = Math.min(CAM_PITCH_MAX, pitch + 3); dirty = true; }
+    if (e.key === 'ArrowDown')  { pitch = Math.max(CAM_PITCH_MIN, pitch - 3); dirty = true; }
+  });
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  if (!started) { lastMs = now; started = now; }
+  let dt = (now - lastMs) * 0.001;
+  lastMs = now;
+  if (!(dt > 0)) dt = 0.016;
+  if (dt > 0.1) dt = 0.1;                       // Đừng làm cho hoạt ảnh nhảy một bước lớn khi chuyển về tab
+
+  const t = (now - started) * 0.001;
+
+  if (reduceMotion && !dirty) return;           // Đối với các hình ảnh tĩnh, không cần phải vẽ lại trong mỗi khung hình.
+  dirty = false;
+
+  angle = (angle + ROT_SPEED * dt) % 360;
+  ringAngle = (ringAngle + RING_SPIN * dt) % 360;
+
+  const b = built;
+  b.spinning.rotation.y = angle * Math.PI / 180;
+  b.flameGroup.rotation.y = angle * Math.PI / 180;
+  b.ringGroup.rotation.y = ringAngle * Math.PI / 180;
+
+  updateFlame(t, dt);
+  b.flameRef.geo.attributes.position.needsUpdate = true;
+  b.flameRef.geo.attributes.aColor.needsUpdate = true;
+
+  b.mats.forEach(m => { if (m.uniforms.uTime) m.uniforms.uTime.value = t; });
+
+  updateCamera();
+
+  // —— Kết xuất khung cảnh vào một FBO nằm ngoài màn hình ——
+  renderer.setRenderTarget(rtScene);
+  renderer.setClearColor(new THREE.Color(BG[0], BG[1], BG[2]), 1);
+  renderer.clear(true, true, false);
+  renderer.render(scene, camera);
+
+  runBloom();
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+⑨ Khởi động
+══════════════════════════════════════════════════════════════════════════ */
+
+function start(){
+  if (!isWebGLAvailable()) throw new Error('no-webgl');
+  if (typeof THREE === 'undefined') throw new Error('no-three');
+
+  const canvas = document.getElementById('gl');
+
+  reduceMotion = window.matchMedia &&
+                 window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  cssW = Math.max(1, window.innerWidth);
+  cssH = Math.max(1, window.innerHeight);
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const want = cssW * cssH * dpr * dpr, cap = 3.2e6;
+  if (want > cap) dpr = Math.max(1, dpr * Math.sqrt(cap / want));
+
+  renderer = new THREE.WebGLRenderer({canvas:canvas, antialias:false, alpha:false,
+                                      powerPreference:'high-performance'});
+  renderer.autoClear = false;
+  // Về mặt nội bộ, mọi thứ đều được tính toán dựa trên các pixel thiết bị (device pixels):
+  // pixelRatio thực tế bằng 1, và cả bộ đệm canvas lẫn khung nhìn (viewport) cho mỗi FBO
+  // đều nằm trong cùng một hệ tọa độ—nhờ đó không cần phải đoán xem Three.js
+  // thực hiện các chuyển đổi như thế nào bên trong `setRenderTarget`.
+  // DPR (tỷ lệ pixel thiết bị) chỉ được tham chiếu tại một nơi duy nhất:
+  // `gl_PointSize` bên trong vertex shader.
+  renderer.setPixelRatio(1);
+  renderer.setSize(devW(), devH(), false);
+  // Toàn bộ quy trình xử lý hoạt động trên các giá trị thô mà không thực hiện bất kỳ chuyển đổi không gian màu nào — đảm bảo sự tương đồng chính xác đến từng bit so với thuật toán của quy trình xử lý bằng phần cứng cố định (fixed-function pipeline).
+  if (THREE.ColorManagement) {
+    if ('enabled' in THREE.ColorManagement) THREE.ColorManagement.enabled = false;
+    if ('legacyMode' in THREE.ColorManagement) THREE.ColorManagement.legacyMode = true;
+  }
+  if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.LinearEncoding;
+  renderer.toneMapping = THREE.NoToneMapping;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(FOV, cssW / cssH, NEAR, FAR);
+  baseDist = computeBaseDist();
+  updateCamera();
+
+  buildPost();
+  built = build();
+  allocateTargets();
+
+  document.getElementById('keys').textContent =
+    ('ontouchstart' in window) ? 'Kéo để xoay · Cuộn để phóng to' : 'Kéo để xoay · Cuộn để phóng to';
+  document.getElementById('pcount').textContent = TOTAL.toLocaleString('en-US');
+
+  bindInput(canvas);
+  window.addEventListener('resize', onResize);
+  if (window.matchMedia){
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onMq = () => { reduceMotion = mq.matches; dirty = true; };
+    mq.addEventListener ? mq.addEventListener('change', onMq) : mq.addListener(onMq);
+  }
+  fitText();
+
+  renderer.setRenderTarget(null);
+  frame(performance.now());
+}
+
+// Các lời chào được đo đạc dựa trên hình dạng ký tự trước khi vẽ lên khung hình (canvas); nếu phông chữ mong muốn chưa sẵn sàng, các phép đo sẽ dựa trên một phông chữ thay thế (fallback font).
+// Arial Narrow là phông chữ hệ thống (có sẵn trên Windows), trong khi Roboto Condensed cần phải được tải xuống.
+// Trên các thiết bị không có Arial Narrow, khung hình đầu tiên sẽ được đo đạc bằng một phông chữ không chân (sans-serif) phổ thông, dẫn đến việc văn bản hiển thị rộng hơn so với dự kiến.
+// Khi phông chữ nén (condensed font) đã được tải xong, nội dung sẽ được vẽ lại. Vì quá trình kết xuất (render) trên khung hình chỉ mất một phần nghìn giây, việc vẽ lại lần thứ hai hoàn toàn không gây ảnh hưởng gì.
+function refreshGreet(){
+  if (!built) return;
+  try { fitText(); dirty = true; } catch (e){}
+}
+if (document.fonts){
+  if (document.fonts.load){
+    document.fonts.load(GREET_WEIGHT + ' ' + GREET_SIZE + 'px "Roboto Condensed"')
+      .then(refreshGreet, refreshGreet);
+  }
+  if (document.fonts.ready) document.fonts.ready.then(refreshGreet, refreshGreet);
+}
+
+// Hãy hiển thị lớp mặt nạ (mask) trước, sau đó mới tiến hành quy trình tạo nội dung—quá trình này mất vài trăm mili giây—nếu không, giao diện sẽ hoàn toàn trống rỗng khi vừa mở lên.
+function boot(){
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      start();
+      document.getElementById('veil').classList.add('gone');
+    } catch (err){
+      document.getElementById('veil').classList.add('gone');
+      document.getElementById('fallback').classList.add('show');
+      if (window.console) console.error(err);
+    }
+  }));
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
+
+})();
+</script>
