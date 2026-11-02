@@ -218,3 +218,4 @@ birthday_cake.py   Main script (Single-file: Config + Particle generation + Rend
 preview.png        Output screenshot generated via --shot
 ```
 # 3D-Birthday-Cake
+# 3D-Birthday-Cake
